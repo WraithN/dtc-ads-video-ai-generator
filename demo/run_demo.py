@@ -76,7 +76,7 @@ def qc_table(report) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="ai-video-builder end-to-end demo")
+    ap = argparse.ArgumentParser(description="dtc-ads-video-ai-generator end-to-end demo")
     ap.add_argument("--script", default=str(SCRIPTS / "vsl_supplement.txt"))
     ap.add_argument("--style", default="dr_vsl", choices=sorted(STYLES))
     ap.add_argument("--aspect", default="9:16", choices=["9:16", "4:5", "1:1", "16:9"])

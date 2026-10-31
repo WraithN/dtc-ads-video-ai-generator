@@ -1,4 +1,4 @@
-"""ai-video-builder: script -> SceneGraph IR -> finished video ad.
+"""dtc-ads-video-ai-generator: script -> SceneGraph IR -> finished video ad.
 
 Layer map (see docs/ARCHITECTURE.md):
 

@@ -1,4 +1,4 @@
-# Engineering Review — ai-video-builder
+# Engineering Review — dtc-ads-video-ai-generator
 
 > Scope: the full web app (`web/server.py` + `web/frontend`) and the `avb`
 > pipeline package, as of v0.3.0. This is a local, single-user DTC ad-video

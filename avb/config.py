@@ -256,7 +256,7 @@ def env_path(create: bool = False) -> Path:
     p = base / ".env"
     if create and not p.exists():
         p.write_text(
-            "# ai-video-builder secrets (gitignored)\n"
+            "# dtc-ads-video-ai-generator secrets (gitignored)\n"
             "# Written by the settings page / `avb config set-key`. Never commit this file.\n",
             encoding="utf-8",
         )
@@ -273,7 +273,7 @@ def write_env(mapping: dict[str, str], path: str | Path | None = None) -> Path:
 
     existing = p.read_text(encoding="utf-8").splitlines(keepends=True) if p.is_file() else []
     if not existing:
-        existing = ["# ai-video-builder secrets (gitignored)\n"]
+        existing = ["# dtc-ads-video-ai-generator secrets (gitignored)\n"]
 
     out: list[str] = []
     pending = dict(mapping)
@@ -292,7 +292,7 @@ def write_env(mapping: dict[str, str], path: str | Path | None = None) -> Path:
     if pending:
         if out and not out[-1].endswith("\n"):
             out.append("\n")
-        out.append("\n# added by ai-video-builder\n")
+        out.append("\n# added by dtc-ads-video-ai-generator\n")
         for k, v in pending.items():
             out.append(f"{k}={v}\n")
 
@@ -374,7 +374,7 @@ def load_config(
 # --------------------------------------------------------------------------
 
 _TOML_HEADER = """\
-# ai-video-builder configuration
+# dtc-ads-video-ai-generator configuration
 # Docs: docs/USAGE.md
 #
 # Secrets are NOT stored here. This file only names the env var that holds

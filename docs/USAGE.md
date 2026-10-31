@@ -16,7 +16,7 @@ it.
 | Network | needed for DeepSeek + edge-tts; everything else runs offline |
 
 ```bash
-cd ai-video-builder
+cd dtc-ads-video-ai-generator
 python -m pip install -e ".[all]"     # core + edge-tts + rich
 ```
 

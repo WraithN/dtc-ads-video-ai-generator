@@ -1,4 +1,4 @@
-# ai-video-builder
+# dtc-ads-video-ai-generator
 
 **Paste an ad script. Pick a style. Get a finished, Meta-ready video. Then
 revise it by talking to it.**
@@ -7,6 +7,21 @@ An end-to-end automated production pipeline: script → scene breakdown →
 neural voiceover with word-level timings → visuals → kinetic captions →
 music and SFX → rendered MP4. Conversational editing re-renders only what
 actually changed.
+
+---
+
+## Why this exists: the pain points
+
+Script-to-video tooling sounds solved until you run it as a business. The
+pain points this project is built around:
+
+- **Editing is all-or-nothing.** Most pipelines are `script → clips → stitch → mp4`. There is no layer you can edit, so "change the first 10 seconds" means regenerate everything — minutes and dollars to move one cut.
+- **Every revision re-spends.** A client's "make the hook punchier" re-renders the whole 60s ad, re-paying for every clip and the voiceover you already had.
+- **Vendor lock-in and silent breakage.** One model API changes or shuts down (Sora 2 closed on 2026-09-24) and the pipeline dies. Swapping usually means a rewrite.
+- **Invisible cost.** Without per-run cost accounting you cannot control unit economics — the whole game for high-volume DTC.
+- **Fragile renders.** A run that dies at scene 17/20 (balance halt, rate limit) restarts from zero and re-spends on the 16 scenes that were already fine.
+- **Drifting product identity.** Generic AI templates make a Moutai and a bedside lamp sound identical, and the product morphs shot-to-shot because nothing anchors it.
+- **Unsafe "AI editing".** LLM edits that write arbitrary fields or touch pixels can silently corrupt the output or leak files outside the project.
 
 ---
 
@@ -35,10 +50,31 @@ See **`docs/PROVIDERS.md`** for the 2026 TTS and video-generation landscape
 
 ---
 
+## What this project solves
+
+Each pain point above maps to a concrete mechanism — not a marketing claim:
+
+| Pain point | How it is solved | Where |
+|---|---|---|
+| Edits are all-or-nothing | The **SceneGraph IR** sits in the middle; it is the *only* thing ever edited — never pixels, never the MP4 | `avb/ir.py` |
+| Re-rendering everything | Scenes are **content-addressed**; only scenes whose hash moved are re-rendered (85–95% reuse on a typical edit) | `avb/pipeline.py`, `avb/assets/base.py` |
+| Vendor lock-in | A `Provider` abstraction: swap the model by config, not code, and it fails loudly instead of shipping fake footage | `avb/assets/*` |
+| Invisible cost | `CostLedger` records every provider's spend and rolls it up per run and per kind | cost accounting |
+| Fragile renders | SQLite history stores the full IR snapshot, so a resume re-runs **only** the scenes that failed and serves the rest from cache | `web/history_db.py`, `web/server.py` |
+| Drifting identity | Product **traits** are injected as the visual subject *and* copy context on every scene | `avb/brief.py`, `avb/parse.py` |
+| Unsafe AI edits | The LLM *proposes* from a closed whitelist; the code *disposes*, and a plan that sanitises to zero ops falls back to rules | `avb/llm_edit.py` |
+
+The deeper "why" lives in **The one architectural decision that matters** and
+**Conversational editing** below. Production hardening — path-traversal-safe
+video serving, single-flight jobs, tolerant IR loading — is written up in
+**`docs/REVIEW.md`**.
+
+---
+
 ## Quick start
 
 ```bash
-cd ai-video-builder
+cd dtc-ads-video-ai-generator
 python -m pip install -e ".[all]"     # core + edge-tts
 cp .env.example .env                  # then put your DEEPSEEK_API_KEY in it
 
@@ -357,10 +393,21 @@ from a full rebuild into a diff.
 python -m pytest -q
 ```
 
-16 smoke tests, no network, no ffmpeg. They cover the config cascade,
+99 tests, no network, no ffmpeg. They cover the config cascade,
 comment-preserving writes, `.env` loading, JSON extraction, edit-plan
 sanitisation (the guard rails), provider fallback, and the content-addressed
-cache.
+cache — plus IR round-trip + forward-compatible loading, history-DB migration
+and round-trip, the web API (path-traversal guard, resume, single-flight
+jobs), and an i18n key regression guard (`npm run check:i18n` is mirrored as a
+pytest so a missing translation key fails CI, not the end user).
+
+| Test file | What it proves |
+|---|---|
+| `tests/test_smoke.py` | config cascade, `.env` loading, edit-plan rails, provider fallback, cache |
+| `tests/test_ir_roundtrip.py` | IR serialises and reloads; tolerates unknown keys / missing fields |
+| `tests/test_history_db.py` | render history migrates and round-trips, including the IR snapshot |
+| `tests/test_server_api.py` | API path-traversal guard, resume, single-flight job guarding |
+| `tests/test_i18n_keys.py` | every referenced i18n key exists in both `zh` and `en` |
 
 ---
 
@@ -386,27 +433,22 @@ cache.
 ## Layout
 
 ```
-ai-video-builder/
+dtc-ads-video-ai-generator/
 ├── avb.toml              # config (secrets live in .env, not here)
 ├── .env                  # gitignored, holds DEEPSEEK_API_KEY etc.
 ├── pyproject.toml        # package metadata, `avb` entry point
-├── avb/
-│   ├── config.py         # layered config + .env loader
-│   ├── llm.py            # OpenAI-compatible chat client
-│   ├── llm_edit.py       # LLM conversational edit router
-│   ├── parse.py          # script -> IR (heuristic + LLM)
-│   ├── edit.py           # rule-based edit router + apply/invalidate
-│   ├── ir.py             # SceneGraph IR
-│   ├── pipeline.py       # orchestrator, content-addressed segments
-│   ├── qc.py             # quality control
-│   ├── cli.py            # `avb` command
-│   ├── webui.py          # local HTML config page
+├── avb/                  # the pipeline package
+│   ├── config.py  llm.py  llm_edit.py  parse.py  edit.py  ir.py
+│   ├── pipeline.py  qc.py  cli.py  brief.py
+│   ├── webui.py          # local HTML config page (stdlib only)
+│   ├── webapp.py         # documents what the installed package does / does not ship
 │   ├── assets/           # providers: voice / video / image / music
 │   └── render/           # compositor, ffmpeg, remotion
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── USAGE.md
-│   └── PROVIDERS.md      # TTS + video generation survey
-├── tests/test_smoke.py
+├── web/                  # FastAPI app + browser UI (the `avb web` server)
+│   ├── server.py         # REST API, path-traversal-safe video serving, resume
+│   ├── history_db.py     # SQLite render history + IR snapshots
+│   └── frontend/         # React + Vite UI (TypeScript)
+├── docs/                 # ARCHITECTURE / USAGE / WEBAPP / PROVIDERS / REVIEW / CASE_STUDY
+├── tests/                # smoke, history_db, server_api, ir_roundtrip, i18n_keys
 └── demo/                 # scripted tour + sample script
 ```

@@ -3,7 +3,7 @@
 The app itself lives in `web/server.py` at the repo root, next to `avb/`
 rather than inside it. That is deliberate: `web/` is an application shell
 (templates, static assets, HTTP routes) and does not belong in the library
-package that `pip install ai-video-builder` ships.
+package that `pip install dtc-ads-video-ai-generator` ships.
 
 The consequence is that this launcher has to find `web/` on disk. When the
 package is installed, `web/` is not on sys.path, so we locate it relative to
@@ -31,7 +31,7 @@ def _import_app():
         raise RuntimeError(
             f"web app directory not found: {web_dir}\n"
             "This command runs from a source checkout. Installed copies of "
-            "ai-video-builder do not include the web/ application shell."
+            "dtc-ads-video-ai-generator do not include the web/ application shell."
         )
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))

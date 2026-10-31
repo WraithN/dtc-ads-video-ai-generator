@@ -1,6 +1,6 @@
 # Architecture
 
-**ai-video-builder** turns an ad script into a finished, Meta-ready video,
+**dtc-ads-video-ai-generator** turns an ad script into a finished, Meta-ready video,
 then lets you revise it by talking to it. This document explains the shape
 of the system and the reasons it has that shape.
 

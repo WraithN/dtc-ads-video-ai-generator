@@ -121,7 +121,7 @@ def main() -> int:
     title_f = _font(22)
     lab_f = _font(13)
     if title_f:
-        d.text((pad + 2, 14), "ai-video-builder - one script, four styles, three conversation edits",
+        d.text((pad + 2, 14), "dtc-ads-video-ai-generator - one script, four styles, three conversation edits",
                fill=(238, 240, 246), font=title_f)
 
     y = 52

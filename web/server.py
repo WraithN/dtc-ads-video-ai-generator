@@ -1,4 +1,4 @@
-"""Web application server for ai-video-builder.
+"""Web application server for dtc-ads-video-ai-generator.
 
 FastAPI backend that wraps the avb pipeline into a web product:
 script in -> video out -> conversational edit -> export for any platform.

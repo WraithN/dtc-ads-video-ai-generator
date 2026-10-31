@@ -109,7 +109,7 @@ PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ai-video-builder · config</title>
+<title>dtc-ads-video-ai-generator · config</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #12161c; --muted: #5b6672;
@@ -170,7 +170,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>ai-video-builder</h1>
+  <h1>dtc-ads-video-ai-generator</h1>
   <p class="sub">Configuration · writes to <code id="cfgpath">avb.toml</code> · secrets stay in <code>.env</code></p>
 
   <div class="card" id="status-card">

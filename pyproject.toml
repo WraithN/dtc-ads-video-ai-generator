@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-video-builder"
+name = "dtc-ads-video-ai-generator"
 version = "0.3.0"
 description = "Script -> SceneGraph IR -> finished video ad, with conversational editing"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "ai-video-builder" }]
+authors = [{ name = "dtc-ads-video-ai-generator" }]
 keywords = ["video", "tts", "generative", "advertising", "pipeline"]
 classifiers = [
   "Programming Language :: Python :: 3.11",
