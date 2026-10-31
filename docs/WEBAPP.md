@@ -227,14 +227,18 @@ npm run typecheck
 记录里存的是 **Project 的 JSON 快照**，不是 pickle——换版本也能读。
 
 **为什么 Project IR 放内存**：`/api/edit` 需要拿到上一步的 IR 才能定位场景。
-`avb/ir.py` 有 `to_dict()` 但没有 `from_dict()`，而本服务是本地单进程，
-所以直接把 Project 对象存在 `_projects[job_id]` 里 —— 简单且精确。
-若要让任务跨重启存活，给 `avb/ir.py` 补 `from_dict()` 再落盘。
+同进程内直接把 Project 对象存在 `_projects[job_id]` 里（热路径，避免反复
+反序列化）是最简单的做法。**但跨重启续渲不能只靠它**——所以每次记录渲染
+时，`_record_render` 会把它 `to_json()` 成 `project_json` 一并存进
+`renders` 表。`_run_resume` 在内存里找不到 Project 时（服务器重启后必然如此），
+就用 `Project.from_json()` 从 `project_json` 重建完整的 IR，再只重渲失败的
+场景。这样「余额不足中断 → 重启 → 充值 → 续渲」才是一个真实的跨重启工作流，
+而不仅仅是在同一进程生命周期内生效。
 
 **续渲为什么能省钱**：场景是内容寻址的——同一份 IR + 同一份配置渲染出
 同一个 hash，缓存里就还有那一段 mp4。续渲时用 `only={失败的场景 id}`
 调 `pipe.run()`，好场景命中缓存直接复用，只有失败的场景真正调用厂商 API。
-换厂商 key、换分辨率都会改变 hash，缓存自然失效——这是预期行为。
+换分辨率会改变 hash——segment 缓存键里含 `w/h/fps`，所以缓存自然失效，这是预期行为。换厂商 key / 模型则属于视频生成层的另一条缓存路径，其失效策略由对应视频适配器的 cache key 决定。
 
 **跨线程进度推送**：管线跑在 `run_in_executor` 的 worker 线程里，而
 WebSocket 客户端在主 asyncio 循环上。所以启动时捕获主循环，worker 用
