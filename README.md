@@ -25,31 +25,6 @@ pain points this project is built around:
 
 ---
 
-## What is real, what is not
-
-Straight answer, because the distinction matters:
-
-| Layer | Status |
-|---|---|
-| **IR + content-addressed cache + conversational editing** | real — this is the deliverable |
-| **LLM** (script parse, edit routing) | **real** — DeepSeek V4 by default, any OpenAI-compatible endpoint |
-| **TTS** | **real** — edge-tts neural voices, free, word-level timestamps |
-| **Music / SFX** | synthesised (chord progression + DSP), not generative |
-| **Visuals / footage** | procedural stills + compositor motion; real video providers (Kling, Veo, Jimeng, Wan, Hailuo, CogVideoX) implemented and selected by config |
-
-The offline formant voice and procedural video exist so the pipeline runs
-with zero credentials and zero network. Everything real plugs into the same
-`Provider` interface, so swapping is a config change, not a rewrite.
-
-See **`docs/CASE_STUDY.md`** for the Upwork portfolio case study: answers
-to the five application questions, a demo walk-through script, proposal
-openers, and what is real vs stand-in.
-
-See **`docs/PROVIDERS.md`** for the 2026 TTS and video-generation landscape
-(pricing, licenses, what actually runs on a laptop GPU).
-
----
-
 ## What this project solves
 
 Each pain point above maps to a concrete mechanism — not a marketing claim:
