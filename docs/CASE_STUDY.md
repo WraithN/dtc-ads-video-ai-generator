@@ -158,7 +158,7 @@ swapping Seedance for Kling is a dropdown, not a rewrite.
 >
 > It runs end-to-end today. A 20-scene, 60-second VSL renders to a 41.5 s
 > 9:16 h264+aac file with QC passing on caption sync, duration drift, and
-> safe-area. Repo: **https://github.com/WraithN/ai-tts-project-demo**
+> safe-area. Repo: **https://github.com/WraithN/dtc-ads-video-ai-generator**
 >
 > One thing I want to be straight about: the generative *video* backends in
 > the repo are stand-ins behind a provider interface. The production logic —
@@ -394,7 +394,7 @@ absolute-path manifest。
 > hand-wave: *"individual scenes can be edited without regenerating the
 > entire video."*
 >
-> Demo + code: https://github.com/WraithN/ai-tts-project-demo
+> Demo + code: https://github.com/WraithN/dtc-ads-video-ai-generator
 >
 > The short version: the editable layer is a JSON scene graph, never the
 > pixels. An edit instruction becomes a structured patch; the pipeline
@@ -417,7 +417,7 @@ absolute-path manifest。
 >
 > Built it. Script → SceneGraph IR → finished Meta-ready MP4, with
 > conversational editing that re-renders a diff instead of the video:
-> https://github.com/WraithN/ai-tts-project-demo
+> https://github.com/WraithN/dtc-ads-video-ai-generator
 >
 > Measured on a 20-scene VSL: "make the first 10 seconds punchier" re-renders
 > 3 scenes; "make the mechanism section a comic book" re-renders **1**; a

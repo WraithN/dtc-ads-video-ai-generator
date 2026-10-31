@@ -7,7 +7,7 @@ protocol. The Git Data API lives on api.github.com, so it works anyway.
 
 Usage:
     export GITHUB_TOKEN=ghp_xxx        # needs `repo` scope
-    python tools/push_to_github.py --repo WraithN/ai-tts-project-demo
+    python tools/push_to_github.py --repo WraithN/dtc-ads-video-ai-generator
 
     # or pass it explicitly / put it in .env as GITHUB_TOKEN=...
     python tools/push_to_github.py --repo owner/name --token ghp_xxx
@@ -204,7 +204,7 @@ def push(repo: str, token: str, branch: str = "main") -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repo", default="WraithN/ai-tts-project-demo",
+    ap.add_argument("--repo", default="WraithN/dtc-ads-video-ai-generator",
                     help="owner/name (default: %(default)s)")
     ap.add_argument("--branch", default="main")
     ap.add_argument("--token", default=None,
