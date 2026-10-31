@@ -14,6 +14,7 @@ touching the asset or render layers.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import replace
@@ -248,8 +249,34 @@ def cinematography_for(beat: Beat, style: str, text: str) -> tuple[str, str, lis
     return shot, angle, elements
 
 
+def _product_anchor(product: str = "", traits: str = "") -> str:
+    """A short, always-present description of what is physically on screen.
+
+    Without it every scene drifts into generic product shots and the video
+    model has no idea that "茅台" is a squat ceramic bottle with a red label
+    and a red cap, not "a bottle". The anchor is prepended to every visual
+    prompt so the product stays recognisable across shots — the single
+    biggest lever on AI-video consistency.
+    """
+    bits: list[str] = []
+    name = (product or "").strip()
+    if name:
+        bits.append(name)
+    seen: list[str] = []
+    for t in re.split(r"[\n\r]+|[,，;；/、]+", traits or ""):
+        t = t.strip()
+        if t and t not in seen:
+            seen.append(t)
+    if seen:
+        bits.append(", ".join(seen[:4]))
+    if not bits:
+        return ""
+    return " / ".join(bits)[:220]
+
+
 def compose_visual_prompt(
-    text: str, beat: Beat, style: str, shot: str = "", angle: str = "", elements: list[str] | None = None
+    text: str, beat: Beat, style: str, shot: str = "", angle: str = "",
+    elements: list[str] | None = None, anchor: str = "",
 ) -> str:
     """The full image/video-generation prompt.
 
@@ -262,7 +289,8 @@ def compose_visual_prompt(
     el = ", ".join(elements) if elements else keywords(text)
     look = _STYLE_NOTE.get(style, "")
     kw = keywords(text)
-    parts = [shot, angle, el]
+    # The anchor leads: it is the subject, everything else is how we shoot it.
+    parts = [f"Subject on screen: {anchor}." if anchor else "", shot, angle, el]
     if look:
         parts.append(look)
     parts.append(kw)
@@ -332,6 +360,115 @@ def _sfx_for(beat: Beat, interrupt: float) -> list[Sfx]:
     return []
 
 
+def _scene_cap(target_seconds: float | None, n_items: int) -> int:
+    """How many scenes a runtime target allows.
+
+    ~4s per scene minimum, never fewer than 3. The cap exists to stop a short
+    video from being sliced into a dozen micro-shots -- it is a *cost* knob,
+    not a licence to drop copy: the caller must MERGE the overflow, never
+    truncate it.
+    """
+    if not target_seconds:
+        return n_items
+    try:
+        tgt = float(target_seconds)
+    except (TypeError, ValueError):
+        return n_items
+    if tgt <= 0:
+        return n_items
+    return max(3, min(n_items, math.ceil(tgt / 4)))
+
+
+def _merge_shot_group(group: list[dict]) -> dict:
+    """Collapse several shots into one, keeping every spoken word.
+
+    The visual metadata comes from the first shot of the group (it carries the
+    strongest framing); the elements are unioned so nothing in frame is lost.
+    """
+    if len(group) == 1:
+        return group[0]
+    first = dict(group[0])
+    texts = [str(s.get("text", "")).strip() for s in group]
+    first["text"] = " ".join(t for t in texts if t)
+    els: list[str] = []
+    for s in group:
+        for e in (s.get("elements") or []):
+            e = str(e).strip()
+            if e and e not in els:
+                els.append(e)
+    if els:
+        first["elements"] = els
+    return first
+
+
+def _merge_shots_to_cap(shots: list, cap: int) -> list:
+    """Fit `shots` into `cap` scenes WITHOUT losing any narration.
+
+    Shots are grouped into contiguous buckets of near-equal size and each
+    bucket is merged into a single scene. Dropping the tail instead would
+    silently throw away the CTA -- the part of the ad that sells the click.
+    """
+    if cap >= len(shots) or cap <= 0:
+        return shots
+    base, extra = divmod(len(shots), cap)
+    merged: list = []
+    i = 0
+    for b in range(cap):
+        n = base + (1 if b < extra else 0)
+        group = shots[i:i + n]
+        i += n
+        if not group:
+            continue
+        merged.append(_merge_shot_group(group) if len(group) > 1 else group[0])
+    return merged
+
+
+_PUNCT_RE = re.compile(r"[\s\W_]+", re.UNICODE)
+
+
+def _norm_text(s: str) -> str:
+    """Strip whitespace and punctuation so two spellings of the same line match."""
+    return _PUNCT_RE.sub("", s or "").lower()
+
+
+def _ensure_full_coverage(script: str, shots: list[dict]) -> list[dict]:
+    """Guarantee every script line is spoken by at least one shot.
+
+    The LLM is told to cover the whole script, but models drop the last line
+    often enough to matter (a missing CTA costs the click). This is the
+    safety net: any script line whose text is nowhere in the shot list gets
+    appended as its own shot so the narration can never go missing.
+    """
+    spoken = _norm_text(" ".join(str(s.get("text", "")) for s in shots if isinstance(s, dict)))
+    if not spoken:
+        return shots
+
+    missing: list[str] = []
+    for raw in re.split(r"[\n\r]+|(?<=[.!?。！？])\s*", script):
+        line = raw.strip()
+        if len(line) < 2:
+            continue
+        norm = _norm_text(line)
+        if not norm:
+            continue
+        if norm in spoken:
+            continue
+        # The line may have been split across several shots; a long enough
+        # prefix appearing in the spoken text counts as covered.
+        prefix = norm[: max(4, len(norm) // 2)]
+        if prefix and prefix in spoken:
+            continue
+        missing.append(line)
+
+    if not missing:
+        return shots
+
+    out = list(shots)
+    for line in missing:
+        out.append({"text": line, "beat": "cta", "visual": "", "shot": "", "angle": "", "elements": []})
+    return out
+
+
 def parse_script(
     script: str,
     *,
@@ -341,15 +478,41 @@ def parse_script(
     aspect: Aspect = "9:16",
     fps: int = 30,
     wpm: float = 168.0,
+    target_seconds: float | None = None,
+    script_language: str | None = None,
+    product: str = "",
+    product_traits: str = "",
 ) -> Project:
-    """Turn a plain-text ad script into a SceneGraph IR."""
+    """Turn a plain-text ad script into a SceneGraph IR.
+
+    `script_language` is accepted (and ignored) so this function is a drop-in
+    target for `parse_script_llm`, which forwards the same kwargs when the
+    model call fails and the heuristic parser takes over.
+    """
     project = Project(id=project_id, name=name, script=script, style=style, aspect=aspect, fps=fps)
+    anchor = _product_anchor(product, product_traits)
 
     lines = split_sentences(script)
     if not lines:
         return project
 
     groups = _pack_lines(lines, wpm)
+
+    # Keep the heuristic path in lock-step with the LLM path: a short video
+    # should not be diced into a dozen micro-shots. Same rule -- ~4s/scene
+    # minimum, never fewer than 3. Overflowing scenes are MERGED, not
+    # truncated: dropping them would silently delete the end of the script.
+    cap = _scene_cap(target_seconds, len(groups))
+    if cap < len(groups):
+        merged: list[list[str]] = []
+        base, extra = divmod(len(groups), cap)
+        i = 0
+        for b in range(cap):
+            n = base + (1 if b < extra else 0)
+            merged.append([ln for g in groups[i:i + n] for ln in g])
+            i += n
+        groups = merged
+
     spec = get_style(style)
 
     scenes: list[Scene] = []
@@ -369,7 +532,7 @@ def parse_script(
                 beat=beat,
                 vo=Voiceover(text=text, voice="adam", speed=1.0, energy=energy),
                 visual=Visual(
-                    prompt=compose_visual_prompt(text, beat, style, shot, angle, elements),
+                    prompt=compose_visual_prompt(text, beat, style, shot, angle, elements, anchor=anchor),
                     kind=visual_kind_for(style, beat),
                     motion=motion_for(style, beat),
                     style=style,
@@ -412,16 +575,69 @@ Return ONLY a JSON array. One object per shot:
 
 Rules:
 - Preserve the script's wording. Split only, never rewrite.
+- COVER EVERY LINE. Every word of the script must appear in exactly one shot's
+  "text", in the original order. Do not summarize, skip, merge away or drop a
+  single line -- especially the last one (the CTA / offer). If the script is
+  long, use fewer, longer shots instead of cutting text.
 - A shot should be 1.5-3 seconds of speech. Never exceed 18 words of speech.
 - Give every shot a distinct shot and angle, not the same framing each time.
 - elements is a list of 2-4 concrete, filmable things that must appear in frame.
-- The visual prompt must describe a specific, filmable image that an AI video model can render."""
+- The visual prompt must describe a specific, filmable image that an AI video model can render.
+- If the brief names the product, every visual prompt must show THAT product —
+  its shape, material, packaging, colour and setting. Never a generic
+  "product on a table"."""
 
 
-def _llm_call(script: str, model: str, base_url: str, api_key: str) -> str:
+def _llm_user_prompt(
+    script: str,
+    target_seconds: float | None = None,
+    language: str | None = None,
+    product: str = "",
+    product_traits: str = "",
+) -> str:
+    """Build the user turn: the script plus its hard constraints.
+
+    The scene budget is stated up front so the model plans for it instead of
+    over-splitting and getting truncated afterwards. The coverage rule is
+    repeated here because it is the single most-violated instruction.
+    """
+    parts: list[str] = []
+    if language:
+        parts.append(f"The script is written in {language}. Keep the spoken text verbatim in that language.")
+    if target_seconds:
+        try:
+            tgt = float(target_seconds)
+        except (TypeError, ValueError):
+            tgt = 0.0
+        if tgt > 0:
+            n = _scene_cap(tgt, 999)
+            parts.append(
+                f"The finished video runs about {int(tgt)} seconds. Plan roughly {n} scenes "
+                f"(each scene gets ~{max(2, round(tgt / n))}s of speech). "
+                "Do not exceed that scene count -- pack the script into those scenes."
+            )
+    if product or product_traits:
+        bits = [b for b in (product.strip(), product_traits.strip()) if b]
+        parts.append(
+            "The product being filmed: " + " / ".join(bits) +
+            ". Every 'visual' prompt must describe THIS product -- its shape, materials, "
+            "packaging, colour and setting. Never write a generic 'product on a table'."
+        )
+    parts.append(
+        "Split the script below into shots. Every line must be spoken exactly once, "
+        "in order, including the final line."
+    )
+    parts.append("--- SCRIPT ---\n" + script[:8000])
+    return "\n\n".join(parts)
+
+
+def _llm_call(script: str, model: str, base_url: str, api_key: str, user_prompt: str | None = None) -> str:
     import json as _json
 
     import requests
+
+    if user_prompt is None:
+        user_prompt = script[:8000]
 
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -429,7 +645,7 @@ def _llm_call(script: str, model: str, base_url: str, api_key: str) -> str:
         "temperature": 0.2,
         "messages": [
             {"role": "system", "content": _LLM_SYSTEM},
-            {"role": "user", "content": script[:8000]},
+            {"role": "user", "content": user_prompt},
         ],
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -477,6 +693,14 @@ def parse_script_llm(
         llm_cfg.base_url = base_url
     client = get_client(llm_cfg)
 
+    user_prompt = _llm_user_prompt(
+        script,
+        kwargs.get("target_seconds"),
+        kwargs.get("script_language") or kwargs.get("language"),
+        kwargs.get("product"),
+        kwargs.get("product_traits"),
+    )
+
     # Legacy fallback: bare OPENAI_API_KEY with no config file.
     if not client.available and os.environ.get("OPENAI_API_KEY"):
         try:
@@ -485,6 +709,7 @@ def parse_script_llm(
                 model or os.environ.get("AVB_LLM_MODEL", "gpt-4o-mini"),
                 base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 os.environ["OPENAI_API_KEY"],
+                user_prompt=user_prompt,
             )
             shots = _extract_json_array(raw)
         except Exception:
@@ -498,7 +723,7 @@ def parse_script_llm(
         data = client.chat_json(
             [
                 {"role": "system", "content": _LLM_SYSTEM},
-                {"role": "user", "content": script[:8000]},
+                {"role": "user", "content": user_prompt},
             ]
         )
         shots = data if isinstance(data, list) else data.get("shots") or data.get("scenes") or []
@@ -522,6 +747,19 @@ def _project_from_shots(script: str, shots: list, **kwargs) -> Project:
         fps=kwargs.get("fps", 30),
     )
     spec = get_style(kwargs["style"])
+    anchor = _product_anchor(kwargs.get("product", ""), kwargs.get("product_traits", ""))
+
+    target = kwargs.get("target_seconds")
+    cap = _scene_cap(target, len(shots))
+    if cap < len(shots):
+        # MERGE, never truncate. A short target video must not silently lose
+        # the end of the script -- collapsing two shots into one keeps every
+        # spoken word while still respecting the scene budget.
+        shots = _merge_shots_to_cap(shots, cap)
+
+    # Safety net: if the model dropped a line (usually the last one), put it
+    # back. Runs after the merge so the merged text is what gets checked.
+    shots = _ensure_full_coverage(script, shots)
 
     scenes: list[Scene] = []
     for i, sh in enumerate(shots):
@@ -540,6 +778,12 @@ def _project_from_shots(script: str, shots: list, **kwargs) -> Project:
         elements = [str(e).strip() for e in raw_elements if str(e).strip()] or None
         if not prompt or prompt == build_visual_prompt(text, beat, kwargs["style"]):
             prompt = compose_visual_prompt(text, beat, kwargs["style"], shot, angle, elements)
+        # The product anchor is prepended whatever the source of the prompt:
+        # the LLM writes good framing but forgets the product is a squat
+        # ceramic bottle with a red cap, and the video model needs to be told
+        # in every single shot or the product changes between cuts.
+        if anchor and not prompt.lower().startswith("subject on screen"):
+            prompt = f"Subject on screen: {anchor}. {prompt}"
         interrupt = min(1.0, spec.interrupt_bias + (0.2 if beat == "hook" else 0.0))
         scenes.append(
             Scene(
