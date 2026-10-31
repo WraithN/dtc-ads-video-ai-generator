@@ -34,7 +34,7 @@ dependencies = [
 edge = ["edge-tts>=7.0"]
 # Comfort dependencies for the CLI. Purely optional.
 cli = ["rich>=13.0"]
-# Web app: browser UI + REST/WebSocket API + TikTok publishing.
+# Web app: browser UI + REST/WebSocket API + video export.
 # `uvicorn[standard]` (not plain `uvicorn`) is required: it pulls in
 # `websockets`, without which uvicorn answers every /ws/... upgrade with
 # "Unsupported upgrade request" -> 404, and the UI silently drops to polling.

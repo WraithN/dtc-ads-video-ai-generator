@@ -1,7 +1,7 @@
 """Web application server for ai-video-builder.
 
 FastAPI backend that wraps the avb pipeline into a web product:
-script in -> video out -> conversational edit -> publish to TikTok.
+script in -> video out -> conversational edit -> export for any platform.
 
 Run:  python -m web.server   (or  uvicorn web.server:app --port 8787)
 """
@@ -30,14 +30,25 @@ from avb.config import (
     write_env, save_config,
 )
 from avb.parse import parse_script, parse_script_llm
-from avb.brief import generate_scripts
+from avb.brief import generate_scripts_detailed
 from avb.pipeline import Pipeline
 from avb.edit import apply_plan
 from avb.llm_edit import plan_edit_llm
 from avb.edit import plan_edit
 from avb.provider_specs import (
-    VIDEO_SPECS, VOICE_SPECS, LLM_SPECS, PUBLISH_SPECS,
+    VIDEO_SPECS, VOICE_SPECS, LLM_SPECS,
     spec_for, env_status, mask,
+)
+from web.history_db import (
+    record_render as db_record_render,
+    list_renders as db_list_renders,
+    get_render as db_get_render,
+    record_script as db_record_script,
+    list_scripts as db_list_scripts,
+    get_script as db_get_script,
+    select_script as db_select_script,
+    init as _init_history,
+    migrate_json as _migrate_history,
 )
 
 load_dotenv()
@@ -272,6 +283,120 @@ def _fail_job(job_id: str, err: str):
 _tickers: dict[str, threading.Event] = {}
 
 
+# ---------------------------------------------------------------------------
+# Render history
+#
+# Every render (initial or a retry-from-failure) is recorded so the user can
+# revisit past videos, see which scenes degraded, and resume a partial run
+# without re-spending money on the scenes that already succeeded. The record
+# is persisted to a SQLite store (.avb_web/history.db) so history survives a
+# server restart -- the output mp4s are already on disk, so losing the index
+# on restart would be silly.
+# ---------------------------------------------------------------------------
+
+def _record_render(*, render_id: str, job_id: str, plan_id: str, name: str,
+                   config: dict, project: object | None, report: object | None,
+                   status: str, parent_id: str | None = None,
+                   scenes: list[dict] | None = None,
+                   warnings: list[dict] | None = None) -> dict:
+    """Persist one render (or retry) to the SQLite history store.
+
+    `scenes` / `warnings` may be passed explicitly (the hard-failure path,
+    where there is no RunReport yet but the pipeline has already logged which
+    scenes degraded). When omitted they are derived from `report`.
+    """
+    if scenes is None:
+        scenes = []
+        if project is not None and report is not None:
+            bad = {w.get("scene_id"): w for w in (getattr(report, "warnings", []) or [])}
+            for s in getattr(project, "scenes", []):
+                w = bad.get(s.id)
+                if w:
+                    st = "skipped" if w.get("skipped") else "degraded"
+                else:
+                    st = "ok"
+                scenes.append({"id": s.id, "index": s.index, "status": st})
+    if warnings is None:
+        warnings = [
+            {"scene_index": w.get("index"), "error": w.get("error"),
+             "scope": w.get("scope"), "skipped": w.get("skipped")}
+            for w in (getattr(report, "warnings", []) or [])
+        ] if report else []
+    video_url = None
+    if report is not None and getattr(report, "video", None):
+        video_url = f"/api/video/{Path(report.video).name}"
+    rec = {
+        "render_id": render_id,
+        "job_id": job_id,
+        "plan_id": plan_id,
+        "name": name,
+        "created_at": time.time(),
+        "status": status,  # done | partial | failed
+        "video_url": video_url,
+        "video_path": str(getattr(report, "video", "")) if report else None,
+        "config": config,
+        "scenes": scenes,
+        "cost": float(getattr(report, "cost_usd", 0.0) or 0.0) if report else 0.0,
+        "total_duration": float(getattr(report, "total_duration", 0.0) or 0.0) if report else 0.0,
+        "warnings": warnings,
+        "parent_id": parent_id,
+        "kind": "retry" if parent_id else "render",
+    }
+    db_record_render(rec)
+    return rec
+
+
+def _record_script(*, script_id: str, job_id: str, product: str,
+                   category: str | None, audience: str | None, tone: str | None,
+                   language: str, drafts: list[dict],
+                   traits: str = "",
+                   selected_type: str | None = None,
+                   selected_narration: str | None = None) -> dict:
+    """Persist one script generation to the SQLite history store."""
+    rec = {
+        "script_id": script_id,
+        "job_id": job_id,
+        "product": product,
+        "category": category,
+        "audience": audience,
+        "tone": tone,
+        "language": language,
+        "traits": traits,
+        "created_at": time.time(),
+        "drafts": drafts,
+        "selected_type": selected_type,
+        "selected_narration": selected_narration,
+    }
+    db_record_script(rec)
+    return rec
+
+
+def _video_progress_cb(job_id: str, n_total: int):
+    """Build the per-scene progress callback shared by render + resume."""
+
+    def _cb(info: dict):
+        idx = int(info.get("scene_index") or 0)
+        phase = info.get("phase", "")
+        if phase == "scene_done":
+            frac = idx / max(1, n_total)
+            _update_job(job_id, stage="rendering",
+                        progress=round(0.30 + 0.65 * frac, 3),
+                        message=f"Scene {idx}/{n_total} done",
+                        stats={"phase": "scene_done", "scene_index": idx,
+                               "scene_total": n_total, "cached": info.get("cached")})
+            return
+        frac = (idx - 1) / max(1, n_total) if idx > 1 else 0.0
+        stats = {"phase": phase}
+        for k in ("prompt_chars", "task_id", "status", "elapsed", "received_mb",
+                  "provider", "scene_index", "scene_total", "scene_id", "model"):
+            if info.get(k) is not None:
+                stats[k] = info.get(k)
+        _update_job(job_id, stage="rendering",
+                    progress=round(0.30 + 0.65 * frac, 3), stats=stats)
+
+    return _cb
+
+
 def _start_ticker(job_id: str, phases: list[tuple[str, str]]):
     stop = threading.Event()
     _tickers[job_id] = stop
@@ -292,6 +417,7 @@ class GenerateRequest(BaseModel):
     video_provider: str | None = None  # override
     voice_provider: str | None = None
     out_name: str | None = None
+    resolution: str = "1080p"
 
 
 class EditRequest(BaseModel):
@@ -309,13 +435,6 @@ class EditRequest(BaseModel):
 class ConfigUpdate(BaseModel):
     key: str  # dotted: "llm.model", "video.provider"
     value: str
-
-
-class TikTokUploadRequest(BaseModel):
-    video_path: str
-    title: str = ""
-    hashtags: list[str] = []
-    privacy_level: str = "SELF_ONLY"  # SELF_ONLY | PUBLIC_TO_EVERYONE
 
 
 class SettingsUpdate(BaseModel):
@@ -516,7 +635,6 @@ async def get_settings():
                 LLM_SPECS, cfg.llm.provider, {s.key: cfg.llm.model for s in LLM_SPECS}
             ),
         },
-        "publish": {"specs": _spec_payload(PUBLISH_SPECS, "tiktok")},
         "env_file": str(env_path()),
         "toml_file": str(find_config_path() or Path("avb.toml")),
     }
@@ -651,6 +769,14 @@ class PlanRequest(BaseModel):
     name: str = "untitled"
     style: str = "dr_vsl"
     use_llm: bool = True
+    target_seconds: float | None = None
+    # Language the script is written in. The director model is told so it
+    # never switches the spoken copy into another language.
+    language: str = "en"
+    # What the product is. Threads a "subject on screen" anchor into every
+    # visual prompt so the video model keeps the same product across shots.
+    product: str = ""
+    product_traits: str = ""
 
 
 class ScriptsRequest(BaseModel):
@@ -661,7 +787,17 @@ class ScriptsRequest(BaseModel):
     style: str = "dr_vsl"
     audience: str | None = None
     tone: str | None = None
+    category: str | None = None
     use_llm: bool = True
+    variation: int = 0
+    # Language the ad scripts should be written in. Defaults to English; the
+    # UI sends the current page language so the copy matches the user's market.
+    language: str = "en"
+    # What the product physically IS: category, material, craft, flavour,
+    # spec, price band. Selling points say what it does for the buyer; this
+    # says what it IS, and it is the only way the model can tell a bottle of
+    # baijiu from a sleep lamp.
+    product_traits: str = ""
 
 
 @app.post("/api/scripts")
@@ -684,17 +820,43 @@ async def create_scripts(req: ScriptsRequest):
 
     def _run():
         try:
-            drafts = generate_scripts(
+            drafts, fallback_reason = generate_scripts_detailed(
                 product=params.get("product", ""),
                 selling_points=params.get("selling_points"),
                 style=params.get("style", "dr_vsl"),
                 audience=params.get("audience"),
                 tone=params.get("tone"),
+                category=params.get("category"),
                 use_llm=params.get("use_llm", True),
+                variation=params.get("variation", 0),
+                language=params.get("language", "en"),
+                product_traits=params.get("product_traits", ""),
+            )
+            drafts_payload = [d.to_dict() for d in drafts]
+            # Persist this generation so the user can revisit it from history.
+            _record_script(
+                script_id=job_id, job_id=job_id, product=product,
+                category=params.get("category"), audience=params.get("audience"),
+                tone=params.get("tone"), language=params.get("language", "en"),
+                traits=params.get("product_traits", ""),
+                drafts=drafts_payload,
             )
             _finish_job(job_id, {
-                "brief": {"product": product, "style": params.get("style", "dr_vsl")},
-                "scripts": [d.to_dict() for d in drafts],
+                "brief": {
+                    "product": product,
+                    "style": params.get("style", "dr_vsl"),
+                    "traits": params.get("product_traits", ""),
+                },
+                "scripts": drafts_payload,
+                # History rows are keyed by the generating job id — the UI
+                # echoes it back to mark which concept was chosen.
+                "script_id": job_id,
+                # Tell the user when the offline templates were used instead
+                # of the model. Silently shipping template filler as if it
+                # were AI copy is how a bottle of baijiu ends up selling
+                # "每天都在被同一个问题折磨".
+                "used_llm": not fallback_reason,
+                "fallback_reason": fallback_reason,
             })
         except Exception as e:  # LLM path falls back internally; surface plainly
             _fail_job(job_id, f"脚本生成失败：{e}")
@@ -725,6 +887,9 @@ class RenderRequest(BaseModel):
     video_provider: str | None = None
     voice_provider: str | None = None
     out_name: str | None = None
+    # Render resolution preset. Map keys must match avb.ir.RES_SCALE so the
+    # composer renders smaller/larger frames rather than downscaling.
+    resolution: str = "1080p"
     # Target total length in seconds. Scenes are scaled proportionally after
     # voice synthesis; VO/caption sync is untouched.
     target_seconds: float | None = None
@@ -736,6 +901,13 @@ class RenderRequest(BaseModel):
     # captions (burned-in subtitles) per render.
     with_voice: bool = True
     with_captions: bool = True
+
+
+class RenderResumeRequest(BaseModel):
+    """Resume a partial/failed render from the failure point."""
+
+    render_id: str
+    out_name: str | None = None
 
 
 def _scene_view(scene: object) -> dict:
@@ -817,9 +989,21 @@ async def create_plan(req: PlanRequest):
     def _run():
         try:
             if params.get("use_llm", True):
-                project = parse_script_llm(script, name=params["name"], style=params["style"])
+                project = parse_script_llm(
+                    script, name=params["name"], style=params["style"],
+                    target_seconds=params.get("target_seconds"),
+                    script_language=params.get("language"),
+                    product=params.get("product", ""),
+                    product_traits=params.get("product_traits", ""),
+                )
             else:
-                project = parse_script(script, name=params["name"], style=params["style"])
+                project = parse_script(
+                    script, name=params["name"], style=params["style"],
+                    target_seconds=params.get("target_seconds"),
+                    script_language=params.get("language"),
+                    product=params.get("product", ""),
+                    product_traits=params.get("product_traits", ""),
+                )
             if not getattr(project, "scenes", None):
                 _fail_job(job_id, "没能从脚本里解析出任何场景，请换一段文案试试")
                 return
@@ -884,6 +1068,8 @@ async def render(req: RenderRequest):
 
 def _run_render(job_id: str, params: dict):
     """Render a confirmed plan in a worker thread."""
+    pipe = None
+    cfg0 = load_config()
     try:
         entry = _plans.get(params.get("plan_id", ""))
         if entry is None:
@@ -907,6 +1093,12 @@ def _run_render(job_id: str, params: dict):
             project.style = chosen_style
             for s in getattr(project, "scenes", []):
                 s.visual.style = chosen_style
+
+        # Resolution is likewise a render-time whole-film intent: it drives
+        # project.width/height, so every scene renders at the chosen scale.
+        chosen_resolution = (params.get("resolution") or "1080p").strip()
+        if chosen_resolution:
+            project.resolution = chosen_resolution
 
         cfg = load_config()
         if params.get("video_provider"):
@@ -939,36 +1131,12 @@ def _run_render(job_id: str, params: dict):
         if target is not None:
             target = min(60.0, max(5.0, target))
 
-        # Live video progress: the pipeline stamps scene context onto every
-        # provider report (submit chars, vendor task id, poll status, received
-        # MB). Progress maps scene_index into the 0.30-0.95 band; scene_done
-        # events land exactly on their fraction so the bar only moves forward.
+        # Live video progress: the shared callback maps scene_index into the
+        # 0.30-0.95 band; scene_done events land exactly on their fraction so
+        # the bar only moves forward.
         n_total = len(project.scenes)
 
-        def _video_progress(info: dict):
-            idx = int(info.get("scene_index") or 0)
-            phase = info.get("phase", "")
-            if phase == "scene_done":
-                frac = idx / max(1, n_total)
-                _update_job(job_id, stage="rendering",
-                            progress=round(0.30 + 0.65 * frac, 3),
-                            message=f"Scene {idx}/{n_total} done",
-                            stats={"phase": "scene_done", "scene_index": idx,
-                                   "scene_total": n_total, "cached": info.get("cached")})
-                return
-            # In-scene: stay at the scene's lower bound; the detail lives in
-            # stats for the UI to format.
-            frac = (idx - 1) / max(1, n_total) if idx > 1 else 0.0
-            stats = {"phase": phase}
-            for k in ("prompt_chars", "task_id", "status", "elapsed", "received_mb",
-                      "provider", "scene_index", "scene_total", "scene_id", "model"):
-                if info.get(k) is not None:
-                    stats[k] = info.get(k)
-            _update_job(job_id, stage="rendering",
-                        progress=round(0.30 + 0.65 * frac, 3),
-                        stats=stats)
-
-        pipe.video_progress_cb = _video_progress
+        pipe.video_progress_cb = _video_progress_cb(job_id, n_total)
         ref_images = _resolve_reference_images(params.get("reference_images") or [])
         # Remember them so /api/edit re-renders keep steering generation with
         # the same product images.
@@ -992,6 +1160,19 @@ def _run_render(job_id: str, params: dict):
         def _count(v):
             return len(v) if isinstance(v, (list, tuple)) else (v or 0)
 
+        status = "partial" if getattr(report, "warnings", None) else "done"
+        config = {
+            "style": chosen_style or project.style,
+            "resolution": chosen_resolution or "1080p",
+            "aspect": project.aspect,
+            "video_provider": params.get("video_provider") or cfg0.video.provider,
+            "target_seconds": target,
+            "with_voice": want_voice,
+            "with_captions": want_captions,
+        }
+        _record_render(render_id=job_id, job_id=job_id, plan_id=params["plan_id"],
+                       name=name, config=config, project=project, report=report,
+                       status=status)
         _update_job(job_id, stage="done", progress=1.0, message="Complete",
                      done=True,
                      video_url=f"/api/video/{out_path.name}",
@@ -1003,7 +1184,163 @@ def _run_render(job_id: str, params: dict):
                      reused=_count(getattr(report, "reused", 0)),
                      warnings=list(getattr(report, "warnings", []) or []))
     except Exception as e:
+        # A hard failure still goes into history so the user can resume from
+        # the failure point. Cache reuse means only the scenes that never
+        # finished get re-submitted on retry -- not the whole film.
+        bad = {}
+        if pipe is not None:
+            for w in getattr(pipe, "scene_warnings", []):
+                bad[w.get("scene_id")] = w
+        fail_scenes = []
+        if project is not None:
+            for s in getattr(project, "scenes", []):
+                w = bad.get(s.id)
+                st = ("skipped" if w.get("skipped") else "degraded") if w else "ok"
+                fail_scenes.append({"id": s.id, "index": s.index, "status": st})
+        fail_warnings = [
+            {"scene_index": w.get("index"), "error": w.get("error"),
+             "scope": w.get("scope"), "skipped": w.get("skipped")}
+            for w in bad.values()
+        ]
+        config = {
+            "style": (params.get("style") or "").strip() or "dr_vsl",
+            "resolution": (params.get("resolution") or "1080p").strip(),
+            "aspect": (params.get("aspect") or "9:16").strip(),
+            "video_provider": params.get("video_provider") or cfg0.video.provider,
+            "target_seconds": None,
+            "with_voice": bool(params.get("with_voice", True)),
+            "with_captions": bool(params.get("with_captions", True)),
+        }
+        _record_render(render_id=job_id, job_id=job_id, plan_id=params.get("plan_id", ""),
+                       name=params.get("name") or "untitled", config=config,
+                       project=project, report=None, status="failed",
+                       scenes=fail_scenes, warnings=fail_warnings)
         _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
+
+
+def _run_resume(job_id: str, src_render_id: str, only: set[str] | None, out_name: str | None):
+    """Re-render only the failed scenes of a prior render and re-assemble.
+
+    Good scenes are served from the content-addressed cache, so resuming a
+    partial run re-submits just the scenes that actually failed -- already-
+    spent money is not re-spent, and an account-level top-up (after a balance
+    halt) only pays for the shots that were skipped.
+    """
+    try:
+        rec = db_get_render(src_render_id)
+        if rec is None:
+            raise RuntimeError("Render history record missing")
+        plan_id = rec.get("plan_id", "")
+        project = _projects.get(plan_id) or _projects.get(src_render_id)
+        if project is None:
+            raise RuntimeError("Project expired; please re-run the script step before resuming")
+
+        cfg = load_config()
+        out_dir = Path("demo/out/web")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = rec.get("name") or "untitled"
+        path = out_dir / (out_name or f"{name}_retry_{job_id[:6]}.mp4")
+
+        pipe = Pipeline(workdir=".avb_web", draft=False, config=cfg)
+        _projects[job_id] = project
+        # Inherit the reference images + voice/caption choice from the source
+        # render so the retry keeps the same product identity and audio layer.
+        src_job = rec.get("job_id") or src_render_id
+        ref_images = _ref_images_by_job.get(src_job, [])
+        _ref_images_by_job[job_id] = ref_images
+        flags = _render_flags_by_job.get(src_job, {})
+        want_voice = bool(flags.get("with_voice", True))
+        want_captions = bool(flags.get("with_captions", True)) and want_voice
+        _render_flags_by_job[job_id] = {"with_voice": want_voice, "with_captions": want_captions}
+
+        n_total = len(project.scenes)
+        pipe.video_progress_cb = _video_progress_cb(job_id, n_total)
+        report = pipe.run(project, path, only=only, reference_images=ref_images or None,
+                          with_voice=want_voice, with_captions=want_captions)
+
+        status = "partial" if getattr(report, "warnings", None) else "done"
+        _record_render(render_id=job_id, job_id=job_id, plan_id=plan_id, name=name,
+                       config=rec.get("config", {}), project=project, report=report,
+                       status=status, parent_id=src_render_id)
+        _update_job(job_id, stage="done", progress=1.0, message="Complete", done=True,
+                    video_url=f"/api/video/{path.name}", video_path=str(path),
+                    cost=getattr(report, "cost_usd", 0.0),
+                    total_duration=getattr(report, "total_duration", 0.0),
+                    scenes=len(report.scenes) if hasattr(report, "scenes") else 0,
+                    rendered=len(report.rendered) if hasattr(report, "rendered") else 0,
+                    reused=len(report.reused) if hasattr(report, "reused") else 0,
+                    warnings=list(getattr(report, "warnings", []) or []))
+    except Exception as e:
+        _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
+
+
+@app.post("/api/render/resume")
+async def resume_render(req: RenderResumeRequest):
+    """Retry a partial/failed render from the failure point.
+
+    Partial (some scenes degraded/skipped): re-run ONLY those scenes, reusing
+    the cache for the good ones. Failed (hard error): re-run the whole film,
+    which still reuses cache for any scenes that completed before the crash.
+    """
+    rec = db_get_render(req.render_id)
+    if rec is None:
+        raise HTTPException(404, "Render history not found")
+    if rec.get("status") == "done":
+        raise HTTPException(400, "This render is already complete")
+    if rec.get("status") == "failed":
+        only = None  # full re-run, cache reuse keeps it cheap
+    else:
+        only = {s["id"] for s in rec.get("scenes", []) if s["status"] != "ok"}
+    if not only and rec.get("status") != "failed":
+        raise HTTPException(400, "Nothing to retry — all scenes are good")
+    job_id = _new_job("render")
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_resume, job_id, req.render_id, only, req.out_name)
+    return {"job_id": job_id}
+
+
+@app.get("/api/renders")
+async def list_renders():
+    """All past renders, newest first."""
+    return {"renders": db_list_renders()}
+
+
+@app.get("/api/renders/{render_id}")
+async def get_render(render_id: str):
+    rec = db_get_render(render_id)
+    if rec is None:
+        raise HTTPException(404, "Render not found")
+    return rec
+
+
+@app.get("/api/scripts-history")
+async def list_script_history():
+    """All past script generations, newest first."""
+    return {"scripts": db_list_scripts()}
+
+
+class ScriptSelectRequest(BaseModel):
+    """Which of a batch's four concepts the user took forward."""
+
+    type: str
+    narration: str = ""
+
+
+@app.post("/api/scripts-history/{script_id}/select")
+async def select_script(script_id: str, req: ScriptSelectRequest):
+    """Record the chosen concept on a past script batch."""
+    if db_get_script(script_id) is None:
+        raise HTTPException(404, "Script history not found")
+    db_select_script(script_id, req.type, req.narration)
+    return {"ok": True}
+
+
+@app.get("/api/scripts-history/{script_id}")
+async def get_script_history(script_id: str):
+    rec = db_get_script(script_id)
+    if rec is None:
+        raise HTTPException(404, "Script history not found")
+    return rec
 
 
 @app.post("/api/generate")
@@ -1058,6 +1395,10 @@ def _run_pipeline(job_id: str, params: dict):
             project = parse_script_llm(script, name=name, style=params.get("style", "dr_vsl"))
         else:
             project = parse_script(script, name=name, style=params.get("style", "dr_vsl"))
+
+        chosen_resolution = (params.get("resolution") or "1080p").strip()
+        if chosen_resolution:
+            project.resolution = chosen_resolution
 
         _update_job(job_id, stage="synth", progress=0.15,
                      message=f"Parsed {len(project.scenes)} scenes, synthesizing voiceover...")
@@ -1252,66 +1593,6 @@ def _run_rerender(job_id: str, src_job_id: str | None, project: object,
 
 
 # ---------------------------------------------------------------------------
-# Routes: TikTok
-# ---------------------------------------------------------------------------
-@app.get("/api/tiktok/auth-url")
-async def tiktok_auth_url():
-    """Return the TikTok OAuth2 authorization URL."""
-    from avb.tiktok import get_auth_url
-    cfg = load_config()
-    client_key = os.environ.get("TIKTOK_CLIENT_KEY", "")
-    redirect_uri = os.environ.get("TIKTOK_REDIRECT_URI", "http://localhost:8787/api/tiktok/callback")
-    if not client_key:
-        raise HTTPException(400, "TIKTOK_CLIENT_KEY not set")
-    return {"auth_url": get_auth_url(client_key, redirect_uri)}
-
-
-@app.get("/api/tiktok/callback")
-async def tiktok_callback(code: str, state: str = ""):
-    """OAuth2 callback - exchange code for tokens."""
-    from avb.tiktok import exchange_code
-    cfg = load_config()
-    client_key = os.environ.get("TIKTOK_CLIENT_KEY", "")
-    client_secret = os.environ.get("TIKTOK_CLIENT_SECRET", "")
-    redirect_uri = os.environ.get("TIKTOK_REDIRECT_URI", "http://localhost:8787/api/tiktok/callback")
-    try:
-        tokens = exchange_code(code, client_key, client_secret, redirect_uri)
-        # Save tokens (in production, use proper storage)
-        token_path = Path(".tiktok_tokens.json")
-        token_path.write_text(json.dumps(tokens), encoding="utf-8")
-        return HTMLResponse("<h2>TikTok authorized! You can close this tab.</h2>")
-    except Exception as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/tiktok/upload")
-async def tiktok_upload(req: TikTokUploadRequest):
-    """Upload a video to TikTok via Content Posting API."""
-    from avb.tiktok import upload_video
-
-    video_path = Path(req.video_path)
-    if not video_path.exists():
-        raise HTTPException(404, f"Video not found: {req.video_path}")
-
-    token_path = Path(".tiktok_tokens.json")
-    if not token_path.exists():
-        raise HTTPException(401, "Not authorized. Visit /api/tiktok/auth-url first.")
-
-    tokens = json.loads(token_path.read_text(encoding="utf-8"))
-    try:
-        result = upload_video(
-            video_path=video_path,
-            access_token=tokens.get("access_token", ""),
-            title=req.title,
-            hashtags=req.hashtags,
-            privacy_level=req.privacy_level,
-        )
-        return {"ok": True, "result": result}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# ---------------------------------------------------------------------------
 # Routes: quick TTS preview
 # ---------------------------------------------------------------------------
 @app.post("/api/tts-preview")
@@ -1332,6 +1613,12 @@ async def tts_preview(text: str, voice: str = ""):
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
+# Initialise the SQLite history store and migrate any legacy JSON registry so
+# past videos are listed after a restart.
+_init_history()
+_migrate_history()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8787)

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 __all__ = [
     "EnvSpec", "ProviderSpec",
-    "VIDEO_SPECS", "VOICE_SPECS", "LLM_SPECS", "PUBLISH_SPECS",
+    "VIDEO_SPECS", "VOICE_SPECS", "LLM_SPECS",
     "KINDS", "spec_for", "specs_for_kind", "mask", "env_status", "describe_missing",
 ]
 
@@ -50,7 +50,7 @@ class ProviderSpec:
         return [e.name for e in self.envs if e.required and not os.environ.get(e.name, "").strip()]
 
 
-KINDS = ("video", "voice", "llm", "publish")
+KINDS = ("video", "voice", "llm")
 
 
 VIDEO_SPECS: tuple[ProviderSpec, ...] = (
@@ -227,25 +227,7 @@ LLM_SPECS: tuple[ProviderSpec, ...] = (
 )
 
 
-PUBLISH_SPECS: tuple[ProviderSpec, ...] = (
-    ProviderSpec(
-        key="tiktok", label="TikTok Direct Post", kind="publish",
-        envs=(
-            EnvSpec("TIKTOK_CLIENT_KEY", "Client Key",
-                    hint="TikTok Developer Portal → App → Client Key"),
-            EnvSpec("TIKTOK_CLIENT_SECRET", "Client Secret",
-                    hint="同上，注意不要进 git"),
-            EnvSpec("TIKTOK_REDIRECT_URI", "Redirect URI", required=False,
-                    default="http://localhost:8787/api/tiktok/callback",
-                    hint="必须与开发者后台配置的回调地址完全一致"),
-        ),
-        console="https://developers.tiktok.com",
-        notes="未通过 Content Posting Audit 的应用只能发 SELF_ONLY（仅自己可见）。",
-    ),
-)
-
-
-_ALL = {"video": VIDEO_SPECS, "voice": VOICE_SPECS, "llm": LLM_SPECS, "publish": PUBLISH_SPECS}
+_ALL = {"video": VIDEO_SPECS, "voice": VOICE_SPECS, "llm": LLM_SPECS}
 
 
 def specs_for_kind(kind: str) -> tuple[ProviderSpec, ...]:

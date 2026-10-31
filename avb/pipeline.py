@@ -698,13 +698,14 @@ def _segment_job(
     crf: int,
     preset: str,
     workdir: str | Path,
+    with_captions: bool = True,
 ) -> tuple[Path, bool]:
     """Process-pool entry point. Must stay module-level to be picklable."""
     return _render_segment(
         project, scene, assets,
         global_start=global_start, total=total,
         draft=draft, crf=crf, preset=preset,
-        workdir=workdir,
+        workdir=workdir, with_captions=with_captions,
     )
 
 

@@ -44,6 +44,17 @@ ASPECTS: dict[Aspect, tuple[int, int]] = {
     "16:9": (1920, 1080),
 }
 
+# Resolution presets scale the ASPECTS baseline (1080p-class). The composer
+# renders at project.width x project.height, so picking 720p here literally
+# renders smaller frames rather than downscaling after the fact.
+RES_SCALE: dict[str, float] = {
+    "540p": 0.5,
+    "720p": 2 / 3,
+    "1080p": 1.0,
+    "1440p": 1.5,
+    "4k": 2.0,
+}
+
 # --------------------------------------------------------------------------
 # Nodes
 # --------------------------------------------------------------------------
@@ -193,6 +204,7 @@ class Project:
     name: str = "untitled"
     script: str = ""
     aspect: Aspect = "9:16"
+    resolution: str = "1080p"
     fps: int = 30
     style: str = "dr_vsl"  # project default; scenes may override
     scenes: list[Scene] = field(default_factory=list)
@@ -202,11 +214,11 @@ class Project:
     # -- geometry ----------------------------------------------------------
     @property
     def width(self) -> int:
-        return ASPECTS[self.aspect][0]
+        return int(ASPECTS[self.aspect][0] * RES_SCALE.get(self.resolution, 1.0))
 
     @property
     def height(self) -> int:
-        return ASPECTS[self.aspect][1]
+        return int(ASPECTS[self.aspect][1] * RES_SCALE.get(self.resolution, 1.0))
 
     # -- serialization -----------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -217,6 +229,7 @@ class Project:
             "aspect": self.aspect,
             "fps": self.fps,
             "style": self.style,
+            "resolution": self.resolution,
             "brand": {
                 "name": self.brand.name,
                 "primary": self.brand.primary,
@@ -258,6 +271,7 @@ class Project:
             aspect=d.get("aspect", "9:16"),
             fps=d.get("fps", 30),
             style=d.get("style", "dr_vsl"),
+            resolution=d.get("resolution", "1080p"),
         )
         b = d.get("brand") or {}
         p.brand = Brand(**b) if b else Brand()
