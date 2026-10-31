@@ -17,7 +17,7 @@ wrong layer.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Literal
 
 from .hashing import short_hash
@@ -273,27 +273,20 @@ class Project:
             style=d.get("style", "dr_vsl"),
             resolution=d.get("resolution", "1080p"),
         )
-        b = d.get("brand") or {}
-        p.brand = Brand(**b) if b else Brand()
-        m = d.get("music") or {}
-        p.music = Music(**m) if m else Music()
+        # Tolerate schema drift: a Project saved by a newer build may carry
+        # fields the current dataclasses do not yet know about. Pick only the
+        # fields each node declares, so an unknown key is ignored rather than
+        # raising `TypeError: unexpected keyword argument` on resume. This is
+        # what keeps the project_json column in the history DB forward-safe.
+        p.brand = Brand(**_pick(Brand, d.get("brand") or {}))
+        p.music = Music(**_pick(Music, d.get("music") or {}))
 
         scenes: list[Scene] = []
         for i, s in enumerate(d.get("scenes", [])):
-            vo = Voiceover(**(s.get("vo") or {}))
+            vo = Voiceover(**_pick(Voiceover, s.get("vo") or {}))
             vis_raw = s.get("visual") or {}
-            vis = Visual(
-                prompt=vis_raw.get("prompt", ""),
-                kind=vis_raw.get("kind", "still"),
-                motion=vis_raw.get("motion", "zoom_in"),
-                style=vis_raw.get("style", "dr_vsl"),
-                seed=vis_raw.get("seed", 0),
-                palette=vis_raw.get("palette"),
-                shot=vis_raw.get("shot", ""),
-                angle=vis_raw.get("angle", ""),
-                elements=vis_raw.get("elements"),
-            )
-            cap = CaptionStyle(**(s.get("caption") or {}))
+            vis = Visual(**_pick(Visual, vis_raw))
+            cap = CaptionStyle(**_pick(CaptionStyle, s.get("caption") or {}))
             scenes.append(
                 Scene(
                     id=s.get("id", f"s{i+1:03d}"),
@@ -302,7 +295,7 @@ class Project:
                     vo=vo,
                     visual=vis,
                     caption=cap,
-                    sfx=[Sfx(**x) for x in (s.get("sfx") or [])],
+                    sfx=[Sfx(**_pick(Sfx, x)) for x in (s.get("sfx") or [])],
                     transition=s.get("transition", "cut"),
                     interrupt=s.get("interrupt", 0.0),
                     duration=s.get("duration"),
@@ -314,6 +307,19 @@ class Project:
     @staticmethod
     def from_json(text: str) -> "Project":
         return Project.from_dict(json.loads(text))
+
+
+def _pick(cls: type, d: dict[str, Any]) -> dict[str, Any]:
+    """Select only the fields declared by `cls` from `d`.
+
+    Used by Project.from_dict so deserialization is resilient to schema drift:
+    unknown keys are dropped (forward-compat) and missing keys fall back to the
+    dataclass defaults. Empty/None input yields an empty dict (all defaults).
+    """
+    if not d:
+        return {}
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in d.items() if k in names}
 
     # -- diffing -----------------------------------------------------------
     def scene_map(self) -> dict[str, Scene]:

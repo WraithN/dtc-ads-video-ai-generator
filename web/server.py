@@ -173,12 +173,14 @@ def _resolve_reference_images(paths: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 _jobs: dict[str, dict] = {}
 _ws_clients: dict[str, list[WebSocket]] = {}
-# Live Project IR per job. Kept in memory rather than round-tripped through
-# JSON: the IR is nested dataclasses with no from_dict(), and this server is
-# a local single-process app, so keeping the object is both simpler and
-# exact. If you ever need jobs to survive a restart, add from_dict() to
-# avb/ir.py and persist to disk instead.
+# Live Project IR per job. Each render also persists its IR as project_json
+# (see history_db), so a render can be resumed after a restart via
+# Project.from_json(). We still keep the object in memory for the in-session
+# edit/retry flow, which is both simpler and exact for a local single-process
+# app. _state_lock serialises the cross-thread mutations of the shared
+# job/project maps; the single-flight guard below enforces "one task at a time".
 _projects: dict[str, object] = {}
+_state_lock: threading.Lock = threading.Lock()
 
 
 class JobProgress(BaseModel):
@@ -210,8 +212,11 @@ async def _broadcast(job_id: str, data: dict):
 
 
 def _update_job(job_id: str, **kw):
-    _jobs[job_id].update(kw)
-    snapshot = dict(_jobs[job_id])
+    # Called from worker threads (ticker + completion callbacks) for the same
+    # job, so the update+snapshot must be atomic against concurrent callers.
+    with _state_lock:
+        _jobs[job_id].update(kw)
+        snapshot = dict(_jobs[job_id])
     if _main_loop is None or _main_loop.is_closed():
         return
     try:
@@ -249,6 +254,30 @@ def _new_job(kind: str, message: str = "Job queued") -> str:
         "result": None,
     }
     return job_id
+
+
+def _active_job_id() -> str | None:
+    """Return the id of any job that has not finished yet, else None."""
+    for jid, job in _jobs.items():
+        if not job.get("done"):
+            return jid
+    return None
+
+
+def _require_no_active_job():
+    """Enforce the "one task at a time" invariant.
+
+    A render and a generation (or two renders) running together would both hit
+    the worker thread pool and mutate the shared _projects/_plans maps keyed by
+    plan id, corrupting each other's state. The UI serialises steps, but the
+    API must defend itself: a second start while one is active is rejected.
+    """
+    active = _active_job_id()
+    if active is not None:
+        raise HTTPException(
+            409,
+            "另一个任务正在运行（%s），请等待它完成后再开始新任务。" % active,
+        )
 
 
 def _ticker(job_id: str, stop: threading.Event, phases: list[tuple[str, str]], cap: float = 0.92):
@@ -1054,6 +1083,7 @@ async def get_plan(plan_id: str):
 @app.post("/api/render")
 async def render(req: RenderRequest):
     """Render a confirmed plan. This is the step that costs money."""
+    _require_no_active_job()
     from avb.assets.video import build_video_provider
 
     cfg0 = load_config()
@@ -1300,6 +1330,7 @@ async def resume_render(req: RenderResumeRequest):
     the cache for the good ones. Failed (hard error): re-run the whole film,
     which still reuses cache for any scenes that completed before the crash.
     """
+    _require_no_active_job()
     rec = db_get_render(req.render_id)
     if rec is None:
         raise HTTPException(404, "Render history not found")
@@ -1363,6 +1394,7 @@ async def get_script_history(script_id: str):
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
+    _require_no_active_job()
     # Fail fast with an actionable message rather than burning a job on a
     # pipeline that cannot produce footage: there is no offline video path.
     from avb.assets.video import build_video_provider
@@ -1375,17 +1407,7 @@ async def generate(req: GenerateRequest):
             "尚未配置可用的视频 Provider。请在左侧「Provider 配置」里选择一家并填入 API Key。",
         ) from e
 
-    job_id = uuid.uuid4().hex[:12]
-    _jobs[job_id] = {
-        "job_id": job_id,
-        "stage": "queued",
-        "progress": 0.0,
-        "message": "Job queued",
-        "done": False,
-        "error": None,
-        "video_url": None,
-        "cost": None,
-    }
+    job_id = _new_job("generate")
 
     # Run in background thread (pipeline is sync)
     loop = asyncio.get_event_loop()

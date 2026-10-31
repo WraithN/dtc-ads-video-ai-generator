@@ -112,3 +112,57 @@ def test_project_json_roundtrip_losssless():
     assert p2.scenes[0].vo.text == "hi"
     assert p2.scenes[0].visual.shot == "close-up"
     assert p2.width == p.width
+
+
+# --------------------------------------------------------------------------
+# P3: shared mutable state (one task at a time, locked mutations)
+# --------------------------------------------------------------------------
+
+
+def test_require_no_active_job_helper(monkeypatch):
+    # Isolate the shared job map so we don't trip on state from other tests.
+    monkeypatch.setattr(server, "_jobs", {})
+    server._require_no_active_job()  # no jobs -> fine
+
+    server._jobs["done"] = {"done": True}
+    server._require_no_active_job()  # finished jobs don't count
+
+    server._jobs["active"] = {"done": False}
+    import pytest as _pytest
+
+    with _pytest.raises(Exception) as exc:
+        server._require_no_active_job()
+    # The guard raises FastAPI's HTTPException(409, ...).
+    assert exc.value.status_code == 409
+
+
+def test_resume_rejects_when_another_job_active(client, monkeypatch):
+    # The single-flight guard must fire before any DB/provider work, so a
+    # second start while one job is in flight is rejected with 409.
+    monkeypatch.setattr(server, "_jobs", {"active": {"done": False}})
+    r = client.post("/api/render/resume", json={"render_id": "x"})
+    assert r.status_code == 409
+
+
+def test_update_job_concurrent_no_corruption(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(server, "_jobs", {})
+    ids = [server._new_job("render") for _ in range(8)]
+
+    def worker(jid, n):
+        for i in range(200):
+            server._update_job(jid, progress=i / 200, message=f"m{i}", stage="running")
+
+    threads = [threading.Thread(target=worker, args=(jid, i)) for i, jid in enumerate(ids)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    for jid in ids:
+        job = server._jobs[jid]
+        assert isinstance(job["progress"], float)
+        assert 0.0 <= job["progress"] <= 1.0
+        assert isinstance(job["message"], str)
+        assert job["done"] is False
