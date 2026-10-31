@@ -175,7 +175,7 @@
 <header>
   <div>
     <h1>AI Video Builder</h1>
-    <div class="sub">广告文案 → 成片视频 → 一键发布 TikTok</div>
+    <div class="sub">广告文案 → 成片视频 → 一键导出下载</div>
   </div>
   <div style="font-size:12px;color:var(--muted)">
     <span class="status-dot"></span><span id="sysStatus">就绪</span>
@@ -235,16 +235,6 @@
           <div id="cfgLlmKeys"></div>
         </div>
 
-        <div class="cfg-group">
-          <div class="cfg-title collapsible" id="ttToggle">
-            发布 TikTok<span class="chev" id="ttChevron">展开</span>
-          </div>
-          <div id="ttBody" style="display:none">
-            <div id="cfgPublishKeys"></div>
-            <div class="hint">未通过 Content Posting Audit 的应用只能发「仅自己可见」。</div>
-          </div>
-        </div>
-
         <button class="btn btn-secondary" id="saveCfgBtn">保存配置</button>
         <div class="hint" id="cfgMsg"></div>
         <div class="hint" style="margin-top:8px">
@@ -279,7 +269,7 @@ Forty percent off your first bottle. Tap below."></textarea>
         <div class="field">
           <label>画幅</label>
           <select id="aspect">
-            <option value="9:16">9:16 竖屏（TikTok）</option>
+            <option value="9:16">9:16 竖屏</option>
             <option value="1:1">1:1 方形</option>
             <option value="4:5">4:5 信息流</option>
             <option value="16:9">16:9 横屏</option>
@@ -354,7 +344,6 @@ Forty percent off your first bottle. Tap below."></textarea>
     <div class="panel">
       <div class="tabs">
         <button class="tab active" data-tab="edit">对话式改片</button>
-        <button class="tab" data-tab="publish">发布 TikTok</button>
         <button class="tab" data-tab="log">运行日志</button>
       </div>
 
@@ -368,28 +357,6 @@ Forty percent off your first bottle. Tap below."></textarea>
           <button class="btn btn-secondary" id="editBtn">分析</button>
         </div>
         <div class="hint">AI 会解析你的指令 → 定位受影响的场景 → 只重渲这些场景（其余复用缓存）</div>
-      </div>
-
-      <!-- Publish tab -->
-      <div id="tab-publish" style="display:none">
-        <div class="field">
-          <label>视频标题 / 文案</label>
-          <textarea id="ttTitle" style="min-height:70px" placeholder="你的广告文案 #话题标签"></textarea>
-        </div>
-        <div class="field">
-          <label>可见性</label>
-          <select id="ttPrivacy">
-            <option value="SELF_ONLY">仅自己可见（未过审默认）</option>
-            <option value="PUBLIC_TO_EVERYONE">公开（需 TikTok 审核）</option>
-            <option value="FOLLOWER_OF_CREATOR">仅粉丝</option>
-          </select>
-        </div>
-        <button class="btn btn-secondary" id="ttAuthBtn" style="margin-bottom:10px">① 授权 TikTok 账号</button>
-        <button class="btn btn-success" id="ttUploadBtn">② 发布到 TikTok</button>
-        <div class="hint" style="margin-top:10px">
-          需要 TIKTOK_CLIENT_KEY / SECRET。未通过 TikTok 审核的 app 只能发「仅自己可见」。
-        </div>
-        <div class="error-box" id="ttError"></div>
       </div>
 
       <!-- Log tab -->
@@ -410,7 +377,7 @@ document.querySelectorAll('.tab').forEach(t => {
   t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
-    ['edit','publish','log'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab?'block':'none');
+    ['edit','log'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab?'block':'none');
   };
 });
 
@@ -477,9 +444,6 @@ function renderSettings() {
   $('cfgLlmBase').value = s.llm.base_url || '';
   $('cfgLlmModel').value = s.llm.model || '';
   renderKeys('cfgLlmKeys', lSpec);
-
-  // --- publish ---
-  renderKeys('cfgPublishKeys', (s.publish.specs||[]).find(p => p.key === 'tiktok'));
 
   // --- status panel ---
   const items = vs.map(p => `<div class="provider-item"><span>${p.label}</span><span class="badge ${p.ready?'ok':'off'}">${p.ready?'可用':'未配置'}</span></div>`).join('');
@@ -700,33 +664,6 @@ function addMsg(role, text, meta) {
   $('chatLog').scrollTop = $('chatLog').scrollHeight;
 }
 
-// ---- tiktok ----
-$('ttAuthBtn').onclick = async () => {
-  try {
-    const r = await fetch('/api/tiktok/auth-url').then(r=>r.json());
-    window.open(r.auth_url, '_blank', 'width=800,height=700');
-    addMsg('system','已打开 TikTok 授权页，完成后回到这里发布。','');
-  } catch(e) { $('ttError').textContent = '未配置 TIKTOK_CLIENT_KEY'; $('ttError').style.display='block'; }
-};
-
-$('ttUploadBtn').onclick = async () => {
-  if (!currentVideo) { $('ttError').textContent='请先生成视频'; $('ttError').style.display='block'; return; }
-  $('ttError').style.display='none';
-  try {
-    const r = await fetch('/api/tiktok/upload', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        video_path: currentVideo.replace('/api/video/','demo/out/web/'),
-        title: $('ttTitle').value,
-        privacy_level: $('ttPrivacy').value
-      })
-    }).then(r=>r.json());
-    if (r.ok) { addMsg('system','已提交 TikTok: '+JSON.stringify(r.result),''); appendLog('> tiktok: '+JSON.stringify(r.result)); }
-    else throw new Error(r.detail||'上传失败');
-  } catch(e) {
-    $('ttError').textContent = e.message; $('ttError').style.display='block';
-  }
-};
 </script>
 </body>
 </html>

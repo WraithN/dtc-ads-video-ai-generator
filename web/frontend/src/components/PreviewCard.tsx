@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Film, Loader2 } from 'lucide-react'
+import { AlertTriangle, Download, Film, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import type { Job } from '@/lib/api'
@@ -67,6 +67,16 @@ export function PreviewCard({ job }: { job: Job | null }) {
               <Stat value={formatUsd(job!.cost)} label={t('preview.cost')} />
               <Stat value={String(job!.scenes ?? '—')} label={t('preview.scenes')} />
             </div>
+            {job!.video_url ? (
+              <a
+                href={job!.video_url}
+                download={(job!.video_url.split('/').pop() || 'ad.mp4').replace(/[?#].*$/, '')}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+              >
+                <Download className="h-4 w-4" />
+                {t('download.button')}
+              </a>
+            ) : null}
             <p className="mt-3 text-xs text-muted-foreground">
               {t('preview.rendered', { n: job!.rendered ?? 0, m: job!.reused ?? 0 })} ·{' '}
               {t('preview.reusedHint')}

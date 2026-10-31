@@ -13,7 +13,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge, Separator } from '@/components/ui/primitives'
-import { CollapsibleSection } from '@/components/ui/collapsible'
 import { api, errorText, toastError, type ProviderSpec, type Settings } from '@/lib/api'
 
 const LLM_PRESETS: Record<string, { base_url: string; model: string }> = {
@@ -373,11 +372,6 @@ export function ProviderSettings({
         </div>
 
         <Separator />
-
-        {/* -------------------------------------------------------- publish */}
-        <CollapsibleSection title={t('providers.publish')} description={t('providers.publishHint')}>
-          <div className="space-y-3 pt-1">{envFields(settings.publish.specs[0] ?? null)}</div>
-        </CollapsibleSection>
 
         <Button className="w-full" onClick={save} disabled={saving}>
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

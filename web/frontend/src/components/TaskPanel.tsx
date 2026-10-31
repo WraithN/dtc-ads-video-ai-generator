@@ -155,6 +155,16 @@ export function TaskPanel({
             {t('task.idle')}
           </p>
         ) : null}
+
+        {job?.warnings && job.warnings.length ? (
+          <p className="flex items-center gap-1.5 pt-1 text-[11px] text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            {t('task.warnings', {
+              n: job.warnings.length,
+              skipped: job.warnings.filter((w) => w.skipped).length,
+            })}
+          </p>
+        ) : null}
       </PanelBody>
     </Panel>
   )

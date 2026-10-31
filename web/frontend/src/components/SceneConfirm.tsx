@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Camera, Check, ClipboardCheck, Clapperboard, Loader2, Pencil, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Camera, Check, ClipboardCheck, Clapperboard, HelpCircle, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/input'
+import { AutoTextarea } from '@/components/ui/auto-textarea'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -14,8 +14,20 @@ import {
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import type { PlanScene, Settings } from '@/lib/api'
+import { ANGLE_OPTIONS, SHOT_OPTIONS, type CineOption } from '@/lib/cine'
 import { STYLES } from './ScriptPanel'
 import { cn } from '@/lib/utils'
+
+const RESOLUTIONS = ['540p', '720p', '1080p', '1440p', '4k']
+
+function sceneSeconds(scenes: PlanScene[], targetSeconds: number | null): number[] {
+  const words = scenes.map((s) => s.vo.trim().split(/\s+/).filter(Boolean).length)
+  const totalWords = words.reduce((a, b) => a + b, 0)
+  if (targetSeconds && targetSeconds > 0 && totalWords > 0) {
+    return words.map((w) => Math.round((w / totalWords) * targetSeconds * 10) / 10)
+  }
+  return words.map((w) => Math.round((w / 2.6) * 10) / 10)
+}
 
 /**
  * Step 2: the confirmation gate.
@@ -23,8 +35,8 @@ import { cn } from '@/lib/utils'
  * Everything here is editable and nothing is rendered until the user hits
  * confirm. That is the point -- the model's first pass at scene copy is a
  * draft, and paying for eight clips before reading the hook is how you burn
- * a budget. Visual style and the video model also live here: they only
- * matter at render time, so the brief step stays about the story.
+ * a budget. Visual style, resolution and the video model also live here: they
+ * only matter at render time, so the brief step stays about the story.
  */
 export function SceneConfirm({
   scenes,
@@ -33,6 +45,7 @@ export function SceneConfirm({
   onBack,
   onReparse,
   onConfirm,
+  targetSeconds,
 }: {
   scenes: PlanScene[]
   settings: Settings
@@ -45,11 +58,16 @@ export function SceneConfirm({
     videoProvider: string | null,
     withVoice: boolean,
     withCaptions: boolean,
+    resolution: string,
   ) => void
+  /** Ad runtime (seconds) chosen in the brief; drives per-scene seconds. */
+  targetSeconds: number | null
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const lang = i18n.language || 'en'
   const [draft, setDraft] = useState<PlanScene[]>(scenes)
   const [style, setStyle] = useState('dr_vsl')
+  const [resolution, setResolution] = useState('1080p')
   const [videoModel, setVideoModel] = useState('__default__')
   const [withVoice, setWithVoice] = useState(true)
   const [withCaptions, setWithCaptions] = useState(true)
@@ -83,6 +101,7 @@ export function SceneConfirm({
   const totalWords = draft.reduce((n, s) => n + s.vo.trim().split(/\s+/).filter(Boolean).length, 0)
   // ~2.6 words/sec is the usual short-form VO rate; good enough to warn on.
   const estSeconds = Math.round(totalWords / 2.6)
+  const perScene = sceneSeconds(draft, targetSeconds)
 
   return (
     <Panel>
@@ -110,6 +129,9 @@ export function SceneConfirm({
                   className="bg-primary/10 text-primary hover:bg-primary/15"
                 >
                   {t(`beat.${s.beat}`, { defaultValue: s.beat })}
+                </Badge>
+                <Badge variant="outline" className="font-mono text-[10px]" title={t('confirm.secTitle')}>
+                  ~{perScene[i]}s
                 </Badge>
                 <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   <Pencil className="h-3 w-3" />
@@ -153,8 +175,8 @@ export function SceneConfirm({
                   <Label className="text-[11px] text-muted-foreground">
                     {t('confirm.vo')}
                   </Label>
-                  <Textarea
-                    className={cn('min-h-[56px] resize-y text-sm leading-relaxed')}
+                  <AutoTextarea
+                    className="w-full text-sm leading-relaxed"
                     value={s.vo}
                     onChange={(e) => patch(s.id, 'vo', e.target.value)}
                   />
@@ -165,8 +187,8 @@ export function SceneConfirm({
                   <Label className="text-[11px] text-muted-foreground">
                     {t('confirm.prompt')}
                   </Label>
-                  <Textarea
-                    className="min-h-[52px] resize-y text-sm text-muted-foreground"
+                  <AutoTextarea
+                    className="w-full text-sm text-muted-foreground"
                     value={s.prompt}
                     onChange={(e) => patch(s.id, 'prompt', e.target.value)}
                   />
@@ -178,14 +200,20 @@ export function SceneConfirm({
                     {t('confirm.shot')} · {t('confirm.angle')} · {t('confirm.elements')}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <CineField
+                    <CineSelect
                       label={t('confirm.shot')}
+                      options={SHOT_OPTIONS}
                       value={s.shot}
+                      lang={lang}
+                      placeholder={t('confirm.shotPlaceholder')}
                       onChange={(v) => patch(s.id, 'shot', v)}
                     />
-                    <CineField
+                    <CineSelect
                       label={t('confirm.angle')}
+                      options={ANGLE_OPTIONS}
                       value={s.angle}
+                      lang={lang}
+                      placeholder={t('confirm.anglePlaceholder')}
                       onChange={(v) => patch(s.id, 'angle', v)}
                     />
                     <div className="col-span-2">
@@ -203,15 +231,19 @@ export function SceneConfirm({
         </div>
 
         {/* Render-time picks: whole-film visual style + which video model
-            spends the money. Both only take effect on confirm. */}
+            spends the money + render resolution. All only take effect on
+            confirm. Tooltips explain what each knob costs/does. */}
         <div className="space-y-2.5 rounded-lg border border-border bg-muted/40 p-3.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
             <Clapperboard className="h-4 w-4 text-primary" />
             {t('confirm.renderSetup')}
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">{t('confirm.style')}</Label>
+              <Label className="flex items-center gap-1 text-xs">
+                {t('confirm.style')}
+                <Tip title={t('confirm.styleTip')} />
+              </Label>
               <Select value={style} onValueChange={setStyle}>
                 <SelectTrigger>
                   <SelectValue />
@@ -226,7 +258,10 @@ export function SceneConfirm({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">{t('confirm.videoModel')}</Label>
+              <Label className="flex items-center gap-1 text-xs">
+                {t('confirm.videoModel')}
+                <Tip title={t('confirm.videoModelTip')} />
+              </Label>
               <Select value={videoModel} onValueChange={setVideoModel}>
                 <SelectTrigger>
                   <SelectValue />
@@ -236,6 +271,24 @@ export function SceneConfirm({
                   {settings.video.specs.map((s) => (
                     <SelectItem key={s.key} value={s.key}>
                       {t(`vendor.${s.key}.label`, { defaultValue: s.label })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="col-span-2 space-y-1.5 sm:col-span-1">
+              <Label className="flex items-center gap-1 text-xs">
+                {t('confirm.resolution')}
+                <Tip title={t('confirm.resolutionTip')} />
+              </Label>
+              <Select value={resolution} onValueChange={setResolution}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RESOLUTIONS.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -283,6 +336,7 @@ export function SceneConfirm({
                 videoModel === '__default__' ? null : videoModel,
                 withVoice,
                 withCaptions,
+                resolution,
               )
             }
             disabled={busy || draft.length === 0}
@@ -318,6 +372,69 @@ function CineField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
+    </div>
+  )
+}
+
+/** Sentinel for "nothing selected" — Radix rejects an empty SelectItem value. */
+const NO_VALUE = '__none__'
+
+/**
+ * Localised dropdown for a cinematography property (shot / angle).
+ *
+ * The stored value is always the canonical English term the parser and the
+ * video prompt already understand, so switching the page language never
+ * changes what gets rendered — only what the user reads. Values coming back
+ * from the LLM that are outside the preset list are kept as a fallback option
+ * instead of being silently dropped.
+ */
+function CineSelect({
+  label,
+  options,
+  value,
+  lang,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  options: CineOption[]
+  value: string
+  lang: string
+  placeholder: string
+  onChange: (v: string) => void
+}) {
+  const { t } = useTranslation()
+  const current = (value || '').trim()
+  const zh = lang.startsWith('zh')
+  const match = options.find((o) => o.value.toLowerCase() === current.toLowerCase())
+  const selected = match ? match.value : current ? current : NO_VALUE
+  const emit = (v: string) => onChange(v === NO_VALUE ? '' : v)
+
+  return (
+    <div className="space-y-1">
+      <Label className="text-[10px] text-muted-foreground">{label}</Label>
+      <Select value={selected} onValueChange={emit}>
+        <SelectTrigger className="h-7 text-xs">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {!match && current ? (
+            <SelectItem value={current} className="text-xs italic">
+              {current} · {t('confirm.customValue')}
+            </SelectItem>
+          ) : null}
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value} className="text-xs">
+              {zh ? `${o.zh} · ${o.en}` : o.en}
+            </SelectItem>
+          ))}
+          {selected !== NO_VALUE ? (
+            <SelectItem value={NO_VALUE} className="text-xs text-muted-foreground">
+              {placeholder}
+            </SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
     </div>
   )
 }
@@ -366,5 +483,20 @@ function ToggleRow({
         />
       </button>
     </div>
+  )
+}
+
+/** Tiny inline tooltip: a question-mark icon with a native title (works
+ *  without a popover library; keeps config labels compact). */
+function Tip({ title }: { title: string }) {
+  if (!title) return null
+  return (
+    <span
+      className="inline-flex cursor-help text-muted-foreground/60"
+      title={title}
+      aria-label={title}
+    >
+      <HelpCircle className="h-3 w-3" />
+    </span>
   )
 }

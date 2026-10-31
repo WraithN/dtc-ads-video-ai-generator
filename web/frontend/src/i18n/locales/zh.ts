@@ -1,7 +1,7 @@
 export default {
   app: {
     title: 'AI Video Builder',
-    subtitle: '脚本进 · 成片出 · 一键发 TikTok',
+    subtitle: '脚本进 · 成片出 · 一键导出下载',
     lang: '语言',
     theme: '主题',
     themeLight: '浅色',
@@ -10,7 +10,7 @@ export default {
 
   hero: {
     title: '把一件产品，变成一支能发的广告片',
-    sub: '描述产品、从四套广告角度里挑一套、逐镜头微调分镜，然后渲染并发布。在你确认文案之前，不产生任何费用。',
+    sub: '描述产品、从四套广告角度里挑一套、逐镜头微调分镜，然后渲染并导出。在你确认文案之前，不产生任何费用。',
   },
 
   status: {
@@ -32,8 +32,6 @@ export default {
     videoHint: '没有离线兜底：每家都是真实模型，必须配 Key 才能出片。',
     voice: '配音',
     llm: 'LLM（分镜解析 / 改片路由）',
-    publish: '发布 TikTok',
-    publishHint: '未通过 Content Posting Audit 的应用只能发「仅自己可见」。',
     model: '模型版本',
     modelCustom: '自定义模型 id…',
     modelCustomHint: '例：MiniMax-Hailuo-2.3 —— 厂商改名很频繁',
@@ -104,13 +102,11 @@ export default {
     DEEPSEEK_API_KEY: { label: 'API Key', hint: 'platform.deepseek.com → API Keys' },
     MOONSHOT_API_KEY: { label: 'API Key', hint: 'platform.moonshot.cn → API keys' },
     OPENAI_API_KEY: { label: 'API Key', hint: 'OpenAI，或任何 OpenAI 兼容网关' },
-    TIKTOK_CLIENT_KEY: { label: 'Client Key', hint: 'TikTok 开发者后台 → App → Client Key' },
-    TIKTOK_CLIENT_SECRET: { label: 'Client Secret', hint: '同上，注意不要进 git' },
-    TIKTOK_REDIRECT_URI: { label: 'Redirect URI', hint: '必须与开发者后台配置的回调地址一致' },
   },
 
   nav: {
     create: '创作',
+    history: '历史',
     settings: '设置',
   },
 
@@ -128,7 +124,7 @@ export default {
     confirm: '确认文案',
     render: '生成视频',
     refine: '微调',
-    publish: '发布',
+    download: '导出下载',
   },
 
   beat: {
@@ -160,17 +156,34 @@ export default {
 
   brief: {
     title: '产品简报 → 广告脚本',
-    product: '产品',
+    language: '脚本语言',
+    product: '产品名',
     productPlaceholder: '例：Lumo 助眠灯',
+    sampleHint: '或选个示例快速填充：',
     points: '卖点',
     pointsPlaceholder: '每行一个：\n入睡速度快 2 倍\n日出暖光唤醒',
+    traits: '产品特性',
+    traitsTip: '写清楚它「是什么」，不只是「有什么用」。AI 靠这个认出品类——否则一瓶茅台和一只助眠灯会写出同一套文案。',
+    traitsPlaceholder:
+      '每行一条，写客观事实：\n53度酱香型白酒\n赤水河核心产区\n五年陈酿\n红标陶瓷瓶\n官方直供',
+    traitsHint:
+      '填了产品特性，文案会具体到口感、场景、工艺；这些同时会作为「镜头主体」写进每个分镜的画面提示词，保证产品前后一致。',
     style: '视觉风格',
     tone: '调性（可选）',
     tonePlaceholder: '例：安心、高级感、俏皮（可直接输入）',
     tonePresets: ['安心', '高级感', '俏皮', '专业可信', '活力元气', '极简克制'],
+    tagPlaceholder: '输入后回车添加，或点选下方标签',
+    tagHint: '可多选，也能自己写新标签',
     audience: '目标人群（可选）',
     audiencePlaceholder: '例：新手爸妈、夜班族（可直接输入）',
     audiencePresets: ['新手爸妈', '职场白领', '学生党', '健身人群', '养宠家庭', '银发族'],
+    category: '分类（可选）',
+    categoryPlaceholder: '例：3C数码 / 美妆护肤 / 小家电（可直接输入）',
+    categoryPresets: [
+      '3C数码', '美妆护肤', '服饰鞋包', '食品饮料', '家居日用', '小家电',
+      '母婴亲子', '运动户外', '图书文娱', '汽车用品', '医药健康', '宠物用品',
+      '珠宝配饰', '办公文具', '数码配件',
+    ],
     duration: '视频时长',
     durationHint: '成片目标总时长，5–60 秒（每次 ±5）。各场景等比拉伸以贴近目标，配音与字幕保持同步。',
     refTitle: '产品参考图（可选）',
@@ -186,6 +199,10 @@ export default {
     toScenes: '下一步：分镜',
     planning: '解析中…',
     needInput: '请至少填写产品名称或一个卖点',
+    fallbackTitle: '这次没有走 AI 生成，已退回模板文案。',
+    fallbackBody:
+      '模板只按品类套用固定句式，写不出产品的具体细节，所以看起来会很生硬。检查一下「使用 AI 写脚本」开关和 API 配置，再点重新生成。',
+    regenerate: '不满意？重新生成广告脚本',
   },
 
   scriptType: {
@@ -205,6 +222,9 @@ export default {
     shot: '镜头',
     angle: '视角',
     elements: '画面元素（逗号分隔）',
+    shotPlaceholder: '未指定镜头',
+    anglePlaceholder: '未指定视角',
+    customValue: '自定义值',
     back: '返回改简报',
     reparse: '重新分镜',
     confirm: '确认，开始生成视频',
@@ -215,14 +235,77 @@ export default {
     renderSetup: '渲染设置',
     renderSetupHint: '视觉风格将应用到所有镜头；视频模型决定本次生成的画质与费用。',
     style: '视觉风格',
+    styleTip: '整片统一的画面语言，会覆盖每个镜头的风格。改风格不重新配音，只重渲画面。',
     videoModel: '视频模型',
-    videoModelDefault: '用设置页保存的默认',
+    videoModelTip: '不同厂商的画质、时长上限和单价不同；未配置则回到设置页的默认。',
+    videoModelDefault: '默认模型',
+    resolution: '分辨率',
+    resolutionTip: '渲染帧尺寸，越高越清晰但更贵更慢。1080p 是性价比平衡点；竖屏短视频 720p 也够用。',
+    secTitle: '本场预计时长（按字数占比分配到目标总时长）',
     voice: '配音',
     voiceHint: '生成 AI 旁白（TTS），关闭则为无声片段',
     captions: '字幕',
     captionsHint: '烧录式动态字幕，跟随旁白逐词高亮',
     captionsLocked: '关闭配音后字幕不可用',
     planned: '已生成 {{n}} 个场景，确认后再出片',
+  },
+
+  summary: {
+    config: '本次配置（仅查看）',
+    configHint: '以下为本次渲染的全部设置，确认后只读，回上一步可修改。',
+    script: '广告脚本',
+    scriptHint: '将作为旁白逐场播出的完整文案，按场景拆分展示。',
+    storyboard: '分镜',
+    storyboardHint: '每个镜头的节拍、预计时长、口播、镜头/视角/元素与画面提示词。',
+    on: '开',
+    off: '关',
+    length: '共 {{n}} 个场景 · 预计 {{s}} 秒',
+    loading: '正在加载渲染摘要…',
+  },
+
+  historyPage: {
+    title: '历史记录',
+    subtitle: '所有渲染过的成片与生成过的文案，都存在本机 SQLite 里。',
+    refresh: '刷新',
+    loading: '加载中…',
+    searchPlaceholder: '搜索产品名、标签、文案内容…',
+    all: '全部',
+    noMatch: '没有匹配的结果。',
+    skipped: '已跳过',
+    degraded: '降级处理',
+    used: '已采用',
+    copy: '复制',
+    copied: '已复制',
+    statVideos: '成片',
+    statRuns: '次渲染',
+    statCost: '累计花费',
+    statCostSub: '全部渲染合计',
+    statScripts: '文案',
+    statBatches: '批',
+    statScenes: '场景',
+    statScenesSub: '累计渲染的分镜数',
+  },
+
+  history: {
+    title: '生成历史',
+    videoTab: '视频',
+    scriptTab: '脚本',
+    empty: '还没有生成过视频。',
+    scriptsEmpty: '还没有生成过脚本。',
+    drafts: '{{n}} 套文案',
+    language: '语言',
+    product: '产品',
+    selectScript: '用这套',
+    viewScript: '展开 / 收起',
+    done: '完成',
+    partial: '部分完成',
+    failed: '失败',
+    ok: '正常',
+    bad: '异常',
+    retryTag: '重试',
+    view: '查看视频',
+    noVideo: '无成片',
+    retry: '从失败点重试',
   },
 
   style: {
@@ -235,7 +318,7 @@ export default {
   },
 
   aspect: {
-    '9:16': '9:16 竖屏（TikTok）',
+    '9:16': '9:16 竖屏',
     '1:1': '1:1 方形',
     '4:5': '4:5 信息流',
     '16:9': '16:9 横屏',
@@ -285,20 +368,13 @@ export default {
     analysisOnly: '当前只返回分析结果，不会触发重渲染',
   },
 
-  publish: {
-    tab: '发布 TikTok',
-    title: '5 · 发布到 TikTok',
-    caption: '视频标题 / 文案',
-    captionPlaceholder: '你的广告文案 #话题标签',
-    privacy: '可见性',
-    privacySelf: '仅自己可见（未过审默认）',
-    privacyPublic: '公开（需 TikTok 审核）',
-    privacyFollowers: '仅粉丝',
-    auth: '① 授权 TikTok 账号',
-    upload: '② 发布到 TikTok',
-    hint: '需要 TIKTOK_CLIENT_KEY / SECRET。未过审核的 app 只能发「仅自己可见」。',
+  download: {
+    title: '5 · 导出视频',
+    button: '下载视频（MP4）',
     needVideo: '请先生成视频',
-    authorized: '已打开授权页，完成后回到这里发布。',
+    hint: '视频已生成完毕。点击下载，拿到 MP4 后自行上传到 TikTok、抖音、视频号或任意平台——无需在本应用暴露你的账号。',
+    whereTitle: '上传到哪里？',
+    whereBody: 'TikTok / 抖音 / 视频号 / Instagram Reels / YouTube Shorts 等任意短视频平台，按各平台常规流程发布即可。',
   },
 
   log: {
@@ -342,6 +418,7 @@ export default {
       received: '已接收 {{mb}} MB',
       cached: '缓存命中',
     },
+    warnings: '{{n}} 个场景降级为纯色背景（{{skipped}} 个因账户额度/密钥问题被跳过），已花的费用仍保留在成片里。',
   },
 
   errors: {

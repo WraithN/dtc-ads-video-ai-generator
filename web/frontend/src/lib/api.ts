@@ -45,7 +45,6 @@ export interface Settings {
     api_key_masked: string
     specs: ProviderSpec[]
   }
-  publish: { specs: ProviderSpec[] }
   env_file: string
   toml_file: string
   written?: { toml: string[]; env: string[] }
@@ -78,6 +77,38 @@ export interface SceneWarning {
   skipped?: boolean
 }
 
+export interface RenderSceneStatus {
+  id: string
+  index: number
+  status: 'ok' | 'degraded' | 'skipped'
+}
+
+export interface RenderRecord {
+  render_id: string
+  job_id: string
+  plan_id: string
+  name: string
+  created_at: number
+  status: 'done' | 'partial' | 'failed'
+  video_url: string | null
+  video_path: string | null
+  config: {
+    style: string
+    resolution: string
+    aspect: string
+    video_provider: string | null
+    target_seconds: number | null
+    with_voice: boolean
+    with_captions: boolean
+  }
+  scenes: RenderSceneStatus[]
+  cost: number
+  total_duration: number
+  warnings: { scene_index?: number; error?: string; scope?: string; skipped?: boolean }[]
+  parent_id: string | null
+  kind: 'render' | 'retry'
+}
+
 export interface Job {
   job_id: string
   kind?: 'scripts' | 'plan' | 'render' | string
@@ -87,7 +118,7 @@ export interface Job {
   done: boolean
   error: string | null
   video_url: string | null
-  /** Absolute local path, needed by the TikTok upload step. */
+  /** Absolute local path of the rendered video, if known. */
   video_path?: string | null
   cost: number | null
   total_duration?: number
@@ -131,9 +162,31 @@ export interface ScriptDraft {
   outline?: { beat: string; line: string }[]
 }
 
+export interface ScriptHistoryRecord {
+  script_id: string
+  job_id: string
+  product: string
+  category: string | null
+  audience: string | null
+  tone: string | null
+  language: string
+  /** What the product physically is — kept so a past brief can be reused. */
+  traits?: string
+  created_at: number
+  drafts: ScriptDraft[]
+  selected_type: string | null
+  selected_narration: string | null
+}
+
 export interface ScriptsResponse {
-  brief: { product: string; style: string }
+  brief: { product: string; style: string; traits?: string }
   scripts: ScriptDraft[]
+  /** History id of this batch (== generating job id), used for write-back. */
+  script_id?: string
+  /** False when the offline templates were used instead of the model. */
+  used_llm?: boolean
+  /** Why the model was not used (shown to the user, never swallowed). */
+  fallback_reason?: string
 }
 
 export interface UploadedImage {
@@ -207,7 +260,15 @@ export const api = {
     style?: string
     audience?: string | null
     tone?: string | null
+    category?: string | null
     use_llm: boolean
+    /** Bump on "regenerate" so the LLM produces a fresh, different batch. */
+    variation?: number
+    /** Language the ad scripts should be written in (e.g. "zh", "en"). */
+    language: string
+    /** What the product physically IS — category, material, craft, flavour,
+     *  spec. Without it the model writes copy that fits any product at all. */
+    product_traits?: string
   }) =>
     json<{ job_id: string }>('/api/scripts', {
       method: 'POST',
@@ -219,7 +280,17 @@ export const api = {
    * Step 1: script -> scenes. Free; nothing is generated yet.
    * Background job; waitJob() resolves to the Plan.
    */
-  plan: (payload: { script: string; name: string; style: string; use_llm: boolean }) =>
+  plan: (payload: {
+    script: string
+    name: string
+    style: string
+    use_llm: boolean
+    target_seconds?: number | null
+    language?: string
+    /** Threads a "subject on screen" anchor into every visual prompt. */
+    product?: string
+    product_traits?: string
+  }) =>
     json<{ job_id: string }>('/api/plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -252,6 +323,7 @@ export const api = {
     video_provider: string | null
     voice_provider: string | null
     target_seconds?: number | null
+    resolution?: string
     reference_images?: string[]
     with_voice?: boolean
     with_captions?: boolean
@@ -293,13 +365,31 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  tiktokAuthUrl: () => json<{ auth_url: string }>('/api/tiktok/auth-url'),
+  /** Render history: every past render (and resume) the server has kept. */
+  renders: () => json<{ renders: RenderRecord[] }>('/api/renders'),
 
-  uploadTiktok: (payload: { video_path: string; title: string; privacy_level: string }) =>
-    json<{ ok: boolean; result?: unknown; detail?: string }>('/api/tiktok/upload', {
+  renderDetail: (id: string) => json<RenderRecord>(`/api/renders/${id}`),
+
+  /** Script generation history: every past brief -> 4 scripts run. */
+  scriptHistory: () => json<{ scripts: ScriptHistoryRecord[] }>('/api/scripts-history'),
+
+  scriptHistoryDetail: (id: string) =>
+    json<ScriptHistoryRecord>(`/api/scripts-history/${id}`),
+
+  /** Mark which of a batch's four concepts was taken forward. */
+  selectScript: (id: string, type: string, narration: string) =>
+    json<{ ok: boolean }>(`/api/scripts-history/${id}/select`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ type, narration }),
+    }),
+
+  /** Resume a partial/failed render from the failure point. Returns a new job. */
+  resumeRender: (render_id: string) =>
+    json<{ job_id: string }>('/api/render/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ render_id }),
     }),
 }
 

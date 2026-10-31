@@ -3,7 +3,7 @@ import type zh from './zh'
 const en: typeof zh = {
   app: {
     title: 'AI Video Builder',
-    subtitle: 'Script in · finished ad out · publish to TikTok',
+    subtitle: 'Script in · finished ad out · export & publish anywhere',
     lang: 'Language',
     theme: 'Theme',
     themeLight: 'Light',
@@ -12,7 +12,7 @@ const en: typeof zh = {
 
   hero: {
     title: 'Turn a product into a finished ad — without touching a timeline',
-    sub: 'Describe the product, pick one of four ad angles, tweak the storyboard shot-by-shot, then render and publish. Nothing is billed until you confirm the copy.',
+    sub: 'Describe the product, pick one of four ad angles, tweak the storyboard shot-by-shot, then render and export. Nothing is billed until you confirm the copy.',
   },
 
   status: {
@@ -34,8 +34,6 @@ const en: typeof zh = {
     videoHint: 'No offline fallback: every vendor is a hosted model and needs a key.',
     voice: 'Voiceover',
     llm: 'LLM (script parsing / edit routing)',
-    publish: 'Publish to TikTok',
-    publishHint: 'Apps that have not passed the Content Posting Audit can only post SELF_ONLY.',
     model: 'Model revision',
     modelCustom: 'Custom model id…',
     modelCustomHint: 'e.g. MiniMax-Hailuo-2.3 — vendors rev these often',
@@ -119,13 +117,11 @@ const en: typeof zh = {
     DEEPSEEK_API_KEY: { label: 'API Key', hint: 'platform.deepseek.com → API Keys' },
     MOONSHOT_API_KEY: { label: 'API Key', hint: 'platform.moonshot.cn → API keys' },
     OPENAI_API_KEY: { label: 'API Key', hint: 'OpenAI, or any OpenAI-compatible gateway' },
-    TIKTOK_CLIENT_KEY: { label: 'Client Key', hint: 'TikTok developer portal → App → Client Key' },
-    TIKTOK_CLIENT_SECRET: { label: 'Client Secret', hint: 'Same place — never commit it' },
-    TIKTOK_REDIRECT_URI: { label: 'Redirect URI', hint: 'Must match the callback registered in the portal' },
   },
 
   nav: {
     create: 'Create',
+    history: 'History',
     settings: 'Settings',
   },
 
@@ -143,7 +139,7 @@ const en: typeof zh = {
     confirm: 'Confirm copy',
     render: 'Render',
     refine: 'Refine',
-    publish: 'Publish',
+    download: 'Export',
   },
 
   beat: {
@@ -175,14 +171,32 @@ const en: typeof zh = {
 
   brief: {
     title: 'Product brief → ad scripts',
-    product: 'Product',
+    language: 'Script language',
+    product: 'Product name',
     productPlaceholder: 'e.g. Lumo sleep lamp',
+    category: 'Category (optional)',
+    categoryPlaceholder: 'e.g. 3C electronics / beauty / small appliance (or type your own)',
+    categoryPresets: [
+      '3C Electronics', 'Beauty & Skincare', 'Apparel & Footwear', 'Food & Beverage',
+      'Home & Living', 'Small Appliances', 'Maternity & Baby', 'Sports & Outdoors',
+      'Books & Media', 'Auto Accessories', 'Health & Medicine', 'Pet Supplies',
+      'Jewelry & Accessories', 'Office & Stationery', 'Digital Accessories',
+    ],
+    sampleHint: 'Or pick a sample to fill instantly:',
     points: 'Selling points',
     pointsPlaceholder: 'One per line:\nfalls asleep 2x faster\nwarm sunrise wake-up light',
+    traits: 'Product traits',
+    traitsTip: 'Describe what it IS, not just what it does for the buyer. This is how the AI recognises the category — without it a bottle of baijiu and a sleep lamp get the same copy.',
+    traitsPlaceholder:
+      'One per line, objective facts:\n53% ABV sauce-aroma baijiu\nChishui river core region\nfive-year aged\nred-label ceramic bottle\nsold direct by the distillery',
+    traitsHint:
+      'With traits filled in, the copy gets concrete about taste, occasion and craft — and they are used as the "subject on screen" in every storyboard prompt, so the product stays the same across cuts.',
     style: 'Visual style',
     tone: 'Tone (optional)',
     tonePlaceholder: 'e.g. reassuring, premium, playful (or type your own)',
     tonePresets: ['reassuring', 'premium', 'playful', 'professional', 'energetic', 'minimal'],
+    tagPlaceholder: 'Type + Enter to add, or pick a chip below',
+    tagHint: 'Multi-select — or write your own tag',
     audience: 'Audience (optional)',
     audiencePlaceholder: 'e.g. new parents, night-shift workers (or type your own)',
     audiencePresets: ['new parents', 'office workers', 'students', 'fitness fans', 'pet owners', 'seniors'],
@@ -201,6 +215,10 @@ const en: typeof zh = {
     toScenes: 'Next: storyboard',
     planning: 'Planning…',
     needInput: 'Enter a product name or at least one selling point',
+    fallbackTitle: 'The AI writer did not run — these are template scripts.',
+    fallbackBody:
+      'The templates use fixed sentences for the product category, so they cannot describe your product and read stiff. Check the "LLM script writer" switch and your API settings, then regenerate.',
+    regenerate: 'Not happy? Regenerate the ad scripts',
   },
 
   scriptType: {
@@ -222,6 +240,9 @@ const en: typeof zh = {
     shot: 'Shot',
     angle: 'Angle',
     elements: 'Elements (comma separated)',
+    shotPlaceholder: 'No shot set',
+    anglePlaceholder: 'No angle set',
+    customValue: 'custom value',
     back: 'Back to script',
     reparse: 'Re-plan',
     confirm: 'Confirm and render',
@@ -232,14 +253,77 @@ const en: typeof zh = {
     renderSetup: 'Render setup',
     renderSetupHint: 'Visual style applies to every shot; the video model decides quality and cost for this run.',
     style: 'Visual style',
+    styleTip: 'Whole-film look that overrides each shot. Changing it re-renders visuals only, not the voiceover.',
     videoModel: 'Video model',
-    videoModelDefault: 'Use default saved in Settings',
+    videoModelTip: 'Vendors differ in quality, max clip length and price; unset falls back to the Settings default.',
+    videoModelDefault: 'Default model',
+    resolution: 'Resolution',
+    resolutionTip: 'Render frame size — higher is sharper but costs more and is slower. 1080p is the sweet spot; 720p is fine for vertical shorts.',
+    secTitle: 'Estimated scene length (split across the target runtime by word share)',
     voice: 'Voiceover',
     voiceHint: 'Generate an AI narration (TTS); off = silent clips',
     captions: 'Captions',
     captionsHint: 'Burned-in kinetic subtitles, word-by-word with the VO',
     captionsLocked: 'Captions require the voiceover',
     planned: '{{n}} scenes drafted — confirm to render',
+  },
+
+  summary: {
+    config: 'This run (read-only)',
+    configHint: 'Every setting for this render. Shown read-only after confirm; go back to edit.',
+    script: 'Ad script',
+    scriptHint: 'The full narration, split per scene, that will be voiced over.',
+    storyboard: 'Storyboard',
+    storyboardHint: 'Each shot’s beat, estimated length, VO, shot/angle/elements and visual prompt.',
+    on: 'On',
+    off: 'Off',
+    length: '{{n}} scenes · ~{{s}}s',
+    loading: 'Loading render summary…',
+  },
+
+  historyPage: {
+    title: 'History',
+    subtitle: 'Every render and every script batch, persisted in a local SQLite store.',
+    refresh: 'Refresh',
+    loading: 'Loading…',
+    searchPlaceholder: 'Search product, tags, script copy…',
+    all: 'All',
+    noMatch: 'Nothing matches that search.',
+    skipped: 'skipped',
+    degraded: 'degraded',
+    used: 'used',
+    copy: 'Copy',
+    copied: 'Copied',
+    statVideos: 'Finished videos',
+    statRuns: 'runs',
+    statCost: 'Total spend',
+    statCostSub: 'across all renders',
+    statScripts: 'Ad scripts',
+    statBatches: 'batches',
+    statScenes: 'Scenes',
+    statScenesSub: 'rendered in total',
+  },
+
+  history: {
+    title: 'Render history',
+    videoTab: 'Videos',
+    scriptTab: 'Scripts',
+    empty: 'No videos generated yet.',
+    scriptsEmpty: 'No scripts generated yet.',
+    drafts: '{{n}} drafts',
+    language: 'Language',
+    product: 'Product',
+    selectScript: 'Use this',
+    viewScript: 'Expand / collapse',
+    done: 'Done',
+    partial: 'Partial',
+    failed: 'Failed',
+    ok: 'ok',
+    bad: 'bad',
+    retryTag: 'retry',
+    view: 'View video',
+    noVideo: 'no video',
+    retry: 'Retry from failure point',
   },
 
   style: {
@@ -252,7 +336,7 @@ const en: typeof zh = {
   },
 
   aspect: {
-    '9:16': '9:16 vertical (TikTok)',
+    '9:16': '9:16 vertical',
     '1:1': '1:1 square',
     '4:5': '4:5 feed',
     '16:9': '16:9 landscape',
@@ -302,20 +386,13 @@ const en: typeof zh = {
     analysisOnly: 'Returns the plan only — it does not trigger a re-render yet',
   },
 
-  publish: {
-    tab: 'Publish',
-    title: '5 · Publish to TikTok',
-    caption: 'Title / caption',
-    captionPlaceholder: 'Your ad copy #hashtags',
-    privacy: 'Visibility',
-    privacySelf: 'Only you (default until approved)',
-    privacyPublic: 'Public (requires TikTok audit)',
-    privacyFollowers: 'Followers only',
-    auth: '① Authorize TikTok',
-    upload: '② Publish to TikTok',
-    hint: 'Needs TIKTOK_CLIENT_KEY / SECRET. Unaudited apps can only post "only you".',
+  download: {
+    title: '5 · Export video',
+    button: 'Download video (MP4)',
     needVideo: 'Generate a video first',
-    authorized: 'Authorization page opened — come back here to publish.',
+    hint: 'Your video is ready. Download the MP4 and upload it to TikTok, Douyin, Reels, Shorts, or any platform yourself — no account needs to be exposed to this app.',
+    whereTitle: 'Where to upload?',
+    whereBody: 'Any short-video platform — TikTok, Douyin, Reels, YouTube Shorts, etc. Publish through each platform’s normal flow.',
   },
 
   log: {
@@ -359,6 +436,8 @@ const en: typeof zh = {
       received: 'received {{mb}} MB',
       cached: 'cached',
     },
+    warnings:
+      '{{n}} scene(s) degraded to a solid backdrop ({{skipped}} skipped on an account/quota issue); the spend already made is kept in the final video.',
   },
 
   errors: {

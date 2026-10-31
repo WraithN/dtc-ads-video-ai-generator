@@ -15,6 +15,12 @@ export function useJob(onLog?: (line: string) => void) {
   const timerRef = useRef<number | null>(null)
   const logRef = useRef(onLog)
   logRef.current = onLog
+  // De-duplicate log lines: the pipeline re-broadcasts the same job state
+  // over both the websocket and the polling fallback, and a single scene can
+  // spend many seconds on one phase. Logging every push would print
+  // "Scene 4/11 done" a dozen times. Only emit when the (stage, message)
+  // pair actually changes.
+  const lastLogRef = useRef<string | null>(null)
 
   const stop = useCallback(() => {
     wsRef.current?.close()
@@ -32,6 +38,14 @@ export function useJob(onLog?: (line: string) => void) {
       stop()
       setRunning(true)
       setJob(null)
+      lastLogRef.current = null
+
+      const maybeLog = (j: Job) => {
+        const key = `${j.stage}|${j.message}`
+        if (lastLogRef.current === key) return
+        lastLogRef.current = key
+        logRef.current?.(`[${j.stage}] ${j.message}`)
+      }
 
       const finish = (j: Job) => {
         setJob(j)
@@ -46,7 +60,7 @@ export function useJob(onLog?: (line: string) => void) {
         timerRef.current = window.setInterval(async () => {
           try {
             const j = await api.getJob(jobId)
-            logRef.current?.(`[${j.stage}] ${j.message}`)
+            maybeLog(j)
             finish(j)
           } catch {
             /* transient; keep polling */
@@ -60,7 +74,7 @@ export function useJob(onLog?: (line: string) => void) {
         wsRef.current = ws
         ws.onmessage = (ev) => {
           const d = JSON.parse(ev.data) as Job
-          logRef.current?.(`[${d.stage}] ${d.message}`)
+          maybeLog(d)
           finish(d)
         }
         ws.onerror = () => poll()

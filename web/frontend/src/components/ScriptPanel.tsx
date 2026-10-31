@@ -21,6 +21,8 @@ export const ASPECTS = ['9:16', '1:1', '4:5', '16:9']
 
 export interface GeneratePayload {
   script: string
+  /** Which of the four frameworks the user picked, echoed back to history. */
+  script_type?: string
   /** Optional now: style is picked at the confirm/render step. */
   style?: string
   aspect: string
@@ -30,6 +32,13 @@ export interface GeneratePayload {
   voice_provider: string | null
   target_seconds: number | null
   reference_images?: string[]
+  /** Language the script was written in (keeps the storyboard in the same
+   *  language as the copy). */
+  language?: string
+  /** Product identity — threaded into the storyboard's visual prompts so the
+   *  video model keeps the same product across every shot. */
+  product?: string
+  product_traits?: string
 }
 
 export function ScriptPanel({
