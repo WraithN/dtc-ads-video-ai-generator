@@ -87,23 +87,42 @@ if _HEAVY_DEPS:
 
 
 def test_synth_fans_out_video_generation():
-    """Six 0.15s scenes across 4 workers must finish well under serial time."""
+    """Six 0.15s scenes across 4 workers must finish well under serial time.
+
+    The assertion is RELATIVE, not absolute: the same run first measures the
+    serial baseline (1 worker) and then the concurrent one (4 workers). A
+    hardcoded second-threshold would make this test a coin flip on a loaded
+    CI box -- what we actually care about is the ratio, i.e. "the fan-out
+    really happened".
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
+        pipe_serial = _make_pipe(td, workers=1)
+        pipe_serial.video = DelayVideo(delay=0.15)
+        proj_serial = _project(6)
+
+        t0 = time.perf_counter()
+        pipe_serial.synth(proj_serial, with_voice=False)
+        serial = time.perf_counter() - t0
+
         pipe = _make_pipe(td, workers=4)
         pipe.video = DelayVideo(delay=0.15)
         proj = _project(6)
 
         t0 = time.perf_counter()
         # with_voice=False isolates the video fan-out from the network-bound
-        # voiceover synthesis, so the wall-time assertion measures only the
+        # voiceover synthesis, so the wall-time comparison measures only the
         # concurrent video generation we are testing here.
         out = pipe.synth(proj, with_voice=False)
         elapsed = time.perf_counter() - t0
 
-        # Serial would be 6 * 0.15 = 0.9s; 4-wide fan-out is ~0.3s.
-        assert elapsed < 0.6, f"wall time too high: {elapsed:.2f}s (not concurrent?)"
+        # 6 scenes / 4 workers is 2 rounds, so the ideal is ~2x faster than
+        # serial. Require at least 1.4x to leave room for thread overhead.
+        assert elapsed < serial / 1.4, (
+            f"4 workers took {elapsed:.2f}s vs serial {serial:.2f}s "
+            f"(expected at least 1.4x speedup)"
+        )
         assert set(out) == {s.id for s in proj.scenes}
 
 
