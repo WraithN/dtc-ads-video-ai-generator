@@ -64,6 +64,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI Video Builder", version="0.3.0", lifespan=lifespan)
 
 STATIC = Path(__file__).parent / "static"
+# Directory that finished MP4s are served from. Resolved once at import time so
+# the traversal check in serve_video() cannot be defeated by a relative parent
+# that changes with the process cwd.
+VIDEO_DIR = Path("demo/out/web").resolve()
 # React build output (web/frontend -> web/static/dist). If it is missing we
 # fall back to the hand-written legacy page, so the server always boots.
 DIST = STATIC / "dist"
@@ -341,6 +345,10 @@ def _record_render(*, render_id: str, job_id: str, plan_id: str, name: str,
         "warnings": warnings,
         "parent_id": parent_id,
         "kind": "retry" if parent_id else "render",
+        # Full Project IR serialised so the render can be resumed after a
+        # server restart, when the in-memory project dict is long gone. The
+        # IR round-trips losslessly through to_json()/from_json().
+        "project_json": project.to_json() if project is not None else None,
     }
     db_record_render(rec)
     return rec
@@ -1233,6 +1241,16 @@ def _run_resume(job_id: str, src_render_id: str, only: set[str] | None, out_name
         plan_id = rec.get("plan_id", "")
         project = _projects.get(plan_id) or _projects.get(src_render_id)
         if project is None:
+            # The in-memory IR is gone (server restarted since the original
+            # render). Rebuild it from the JSON we persisted so resume still
+            # works across restarts -- this is what makes "top up balance,
+            # then resume" a real workflow rather than a same-session trick.
+            pj = rec.get("project_json")
+            if pj:
+                from avb.ir import Project
+
+                project = Project.from_json(pj)
+        if project is None:
             raise RuntimeError("Project expired; please re-run the script step before resuming")
 
         cfg = load_config()
@@ -1465,8 +1483,15 @@ async def job_websocket(ws: WebSocket, job_id: str):
 
 @app.get("/api/video/{filename}")
 async def serve_video(filename: str):
-    path = Path("demo/out/web") / filename
-    if not path.exists():
+    # `filename` is concatenated under VIDEO_DIR. Resolve it and confirm the
+    # result still lives directly inside VIDEO_DIR before touching the FS. This
+    # blocks any traversal regardless of encoding. (Starlette also refuses '/'
+    # inside a path parameter, so the only names reaching here have no separator;
+    # a bare ".." still resolves to a sibling of VIDEO_DIR and fails the check.)
+    # Using a parent-directory comparison -- not a substring ban -- avoids
+    # rejecting legitimate names like "v2..final.mp4".
+    path = (VIDEO_DIR / filename).resolve()
+    if path.parent != VIDEO_DIR or not path.exists():
         raise HTTPException(404, "Video not found")
     return FileResponse(str(path), media_type="video/mp4")
 

@@ -52,7 +52,8 @@ def init() -> None:
                 total_duration REAL,
                 warnings  TEXT,
                 parent_id TEXT,
-                kind      TEXT
+                kind      TEXT,
+                project_json TEXT
             )"""
         )
         conn.execute(
@@ -78,6 +79,13 @@ def init() -> None:
         if "traits" not in cols:
             conn.execute("ALTER TABLE scripts ADD COLUMN traits TEXT")
 
+        # Additive migration: `project_json` (the full Project IR, so a render
+        # can be resumed after a server restart) was added after launch.
+        # SQLite has no IF NOT EXISTS for columns, so check the pragma first.
+        cols_r = {r[1] for r in conn.execute("PRAGMA table_info(renders)").fetchall()}
+        if "project_json" not in cols_r:
+            conn.execute("ALTER TABLE renders ADD COLUMN project_json TEXT")
+
 
 def _load_json(value: Optional[str], default: Any) -> Any:
     if not value:
@@ -99,8 +107,8 @@ def record_render(rec: dict) -> dict:
             """INSERT OR REPLACE INTO renders
                (render_id, job_id, plan_id, name, created_at, status,
                 video_url, video_path, config, scenes, cost, total_duration,
-                warnings, parent_id, kind)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                warnings, parent_id, kind, project_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 rec["render_id"],
                 rec.get("job_id"),
@@ -117,6 +125,7 @@ def record_render(rec: dict) -> dict:
                 json.dumps(rec.get("warnings") or [], ensure_ascii=False),
                 rec.get("parent_id"),
                 rec.get("kind"),
+                rec.get("project_json"),
             ),
         )
     return rec
@@ -155,6 +164,7 @@ def _row_to_render(row: sqlite3.Row) -> dict:
         "warnings": _load_json(row["warnings"], []),
         "parent_id": row["parent_id"],
         "kind": row["kind"] or ("retry" if row["parent_id"] else "render"),
+        "project_json": row["project_json"],
     }
 
 
