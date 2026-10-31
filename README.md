@@ -126,7 +126,7 @@ avb web                     launch the browser UI
 ## Web app
 
 Browser UI over the same pipeline: paste a script, pick a model, watch it
-render, revise it in natural language, publish to TikTok.
+render, revise it in natural language, then export the MP4 to publish anywhere.
 
 The **Provider settings** panel at the top of the left column is where you
 configure vendors: pick Seedance / Kling / Jimeng / Veo / Wan / Hailuo /
@@ -140,17 +140,24 @@ python -m avb.cli web                 # -> http://127.0.0.1:8787
 
 | | |
 |---|---|
-| **Step 1** | fill the product brief (name + selling points + style) → get **four** ad-script concepts (Pain→Solution / Grass-planting / Review / Story); pick one and edit it |
-| **Step 2** | storyboard appears with **cinematography per scene** (shot, angle, elements) — edit the copy, the visual prompt, or the camera; nothing renders yet |
+| **Step 1** | fill the product brief (name, **traits**, selling points, category, language) → get **four** ad-script concepts (Pain→Solution / Grass-planting / Review / Story); pick one and edit it |
+| **Step 2** | storyboard appears with **cinematography per scene** (shot, angle, elements) — edit the copy, the visual prompt, the camera, or the resolution; nothing renders yet |
 | **Step 3** | confirm → render; watch progress; preview the finished 9:16 cut |
 | **Step 4** | chat to revise (`make the hook punchier`) — see which scenes it targets, only those re-render |
-| **Step 5** | authorize a TikTok account and publish (see limits below) |
+| **Step 5** | download the finished MP4 and publish it anywhere (see note below) |
 
 Step 1 replaces the old free-text script box. The brief is turned into four
 *competing* frameworks by `avb/brief.py` (LLM when a key is set, deterministic
 templates offline). Step 2's scene view is no longer a flat copy-split: every
 shot carries a `shot`, `angle`, and `elements` description, and the composed
 image/video prompt weaves them together (see `avb/parse.py`).
+
+The **product traits** field is the one that decides whether the copy sounds
+like it was written for *your* product. State what the thing physically *is*
+(`53度酱香型白酒 / 赤水河核心产区 / 五年陈酿`), not just what it does for
+someone. Skip it and a bottle of Moutai and a bedside lamp come back with the
+same template copy. The traits are also injected as the subject of every
+scene's visual prompt, so the product stays consistent across shots.
 
 Video models are selectable in the UI: **Seedance**, **Kling**, **Jimeng**,
 **Veo**, **Wan**, **Hailuo (MiniMax)** — including the **H3 / H3-Highspeed /
@@ -173,10 +180,18 @@ export MINIMAX_MODEL=MiniMax-Hailuo-2.3
 The UI is **English by default** (Chinese is one click away in the header);
 the generated voiceover defaults to `en-US-AriaNeural`.
 
-**TikTok caveat**: the Content Posting API forces every post to `SELF_ONLY`
-(private) until your app passes TikTok's Content Posting Audit, which takes
-2–6 weeks and rejects apps framed as personal account tools. Budget for the
-audit, or use the private mode to validate the pipeline first.
+**Export, don't auto-publish**: there is no built-in upload. The finished
+9:16 MP4 is served at `/api/video/{file}` — download it and publish to TikTok,
+Douyin, Reels, Shorts, or any platform yourself. (TikTok's Content Posting
+API is gated behind a 2–6 week audit and forces `SELF_ONLY` until then, so
+manual upload is the simpler path.)
+
+**Everything is remembered**: past renders and script batches live in a local
+SQLite store, so the **history** tab lists them after a restart, and a
+failed render can be **resumed from the failure point**. Scenes are
+content-addressed, so a resume re-runs only the scenes that actually failed
+and serves the good ones from cache — topping up your balance after a
+balance halt does not re-spend on shots that already rendered.
 
 Full guide: **`docs/WEBAPP.md`**.
 
