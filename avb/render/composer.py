@@ -38,13 +38,13 @@ _FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def load_font(spec: StyleSpec, size: int) -> ImageFont.FreeTypeFont | None:
-    key = (spec.font_key, size)
+def load_font(spec: StyleSpec, size: int, font_key: str | None = None) -> ImageFont.FreeTypeFont | None:
+    key = (font_key or spec.font_key, size)
     with _CACHE_LOCK:
         hit = _FONT_CACHE.get(key)
         if hit is not None:
             return hit
-    path = resolve_font(spec.font_key) or resolve_font("arialbd")
+    path = resolve_font(font_key or spec.font_key) or resolve_font("arialbd")
     if not path:
         return None
     try:
@@ -207,6 +207,7 @@ def draw_caption(
     W: int,
     H: int,
     energy: float,
+    font_key: str | None = None,
 ) -> None:
     if not chunks:
         return
@@ -228,8 +229,8 @@ def draw_caption(
     local = clamp01((t - cs) / max(1e-6, ce - cs))
 
     font_size = scale_for_canvas(spec, "", W, H)
-    font = load_font(spec, font_size)
-    small = load_font(spec, max(20, int(font_size * 0.92)))
+    font = load_font(spec, font_size, font_key)
+    small = load_font(spec, max(20, int(font_size * 0.92)), font_key)
 
     d = ImageDraw.Draw(frame)
 
@@ -305,7 +306,7 @@ def draw_caption(
             # pop: overshoot then settle
             pop = 1.0 + cap.scale_pop * ease_out_elastic(min(1.0, wp * 1.6)) * (0.6 + 0.4 * energy)
             size = max(12, int(font_size * (pop if is_active else 1.0)))
-            f = load_font(spec, size) or font
+            f = load_font(spec, size, font_key) or font
             cx = x + widths[i] / 2
             x += widths[i] + gap
             col = hl if is_active else fill
@@ -335,12 +336,14 @@ def draw_chrome(
     global_t: float,
     total: float,
     scene: Scene,
+    font_key: str | None = None,
 ) -> None:
     d = ImageDraw.Draw(frame)
     pad = int(W * 0.055)
+    brand_font_key = font_key or (project.brand.font_key or None)
 
-    # brand mark
-    small = load_font(spec, max(18, int(W * 0.038)))
+    # brand mark (uses the brand font when one is set)
+    small = load_font(spec, max(18, int(W * 0.038)), brand_font_key)
     if small:
         text_with_stroke(
             d,
@@ -353,12 +356,20 @@ def draw_chrome(
             anchor="lm",
         )
 
+    # logo watermark -- burned in every scene so batch renders stay branded
+    if project.brand.watermark and project.brand.logo_path:
+        _draw_logo_watermark(d, frame, project.brand, W, H)
+
     # progress bar
     bh = max(4, int(H * 0.006))
     y = H - bh - int(H * 0.045)
     d.rectangle([pad, y, W - pad, y + bh], fill=(255, 255, 255, 70))
     prog = clamp01(global_t / max(1e-6, total))
     d.rounded_rectangle([pad, y, pad + (W - 2 * pad) * prog, y + bh], radius=bh // 2, fill=hex2rgb(project.brand.accent))
+
+    # fixed CTA card -- identical across every variant of the same product
+    if scene.beat == "cta" and project.brand.cta_text:
+        _draw_cta_card(d, project.brand, W, H, brand_font_key, spec)
 
     # lower third for presenter styles
     if "lower_third" in spec.overlays:
@@ -369,6 +380,49 @@ def draw_chrome(
         if small:
             d.text((pad, ly + lh * 0.36), "Dr. Elena Voss", fill=(255, 255, 255), anchor="lm")
             d.text((pad, ly + lh * 0.72), "Veterinary Nutrition Lead", fill=(190, 200, 210), anchor="lm")
+
+
+def _draw_logo_watermark(d: ImageDraw.ImageDraw, frame: Image.Image, brand, W: int, H: int) -> None:
+    path = Path(brand.logo_path)
+    if not path.is_file():
+        return
+    try:
+        logo = Image.open(path).convert("RGBA")
+    except Exception:
+        return
+    # cap the logo to ~16% of the short edge so it never crowds the frame
+    target = int(min(W, H) * 0.16)
+    scale = target / max(1, max(logo.width, logo.height))
+    lw, lh = max(1, int(logo.width * scale)), max(1, int(logo.height * scale))
+    logo = logo.resize((lw, lh), Image.LANCZOS)
+    if brand.logo_opacity < 1.0:
+        alpha = logo.split()[-1].point(lambda a: int(a * max(0.0, min(1.0, brand.logo_opacity))))
+        logo.putalpha(alpha)
+    # top-right, inset by the same pad as the brand mark
+    margin = int(W * 0.055)
+    x = W - lw - margin
+    y = margin + int(W * 0.01)
+    frame.paste(logo, (x, y), logo)
+
+
+def _draw_cta_card(d: ImageDraw.ImageDraw, brand, W: int, H: int, font_key: str | None, spec: StyleSpec) -> None:
+    pad = int(W * 0.055)
+    cw = W - 2 * pad
+    ch = int(H * 0.16)
+    cx0, cy0 = pad, H - ch - int(H * 0.04)
+    radius = int(ch * 0.16)
+    d.rounded_rectangle([cx0, cy0, cx0 + cw, cy0 + ch], radius=radius, fill=hex2rgb(brand.primary))
+    # accent rail on the left edge of the card
+    d.rectangle([cx0, cy0, cx0 + int(W * 0.012), cy0 + ch], fill=hex2rgb(brand.accent))
+
+    font = load_font(spec, max(28, int(H * 0.05)), font_key)
+    sub_font = load_font(spec, max(20, int(H * 0.032)), font_key)
+    if font:
+        d.text((cx0 + int(W * 0.05), cy0 + ch * 0.30), brand.cta_text[:40],
+               fill=hex2rgb(brand.paper), anchor="lm", font=font)
+    if brand.cta_sub and sub_font:
+        d.text((cx0 + int(W * 0.05), cy0 + ch * 0.70), brand.cta_sub[:60],
+               fill=hex2rgb(brand.accent), anchor="lm", font=sub_font)
 
 
 # Scene rendering
@@ -443,8 +497,10 @@ def render_scene_frames(
         # a dark band with nothing on it.
         if with_captions and (assets.vo_words or []):
             scrim(frame, out_w, out_h, scene.caption.position)
-            draw_caption(frame, chunks, t, spec, scene.caption, out_w, out_h, scene.vo.energy)
-        draw_chrome(frame, project, spec, out_w, out_h, global_start + t, total, scene)
+            draw_caption(frame, chunks, t, spec, scene.caption, out_w, out_h, scene.vo.energy,
+                         font_key=project.brand.font_key or None)
+        draw_chrome(frame, project, spec, out_w, out_h, global_start + t, total, scene,
+                    font_key=project.brand.font_key or None)
 
         apply_interrupt_mutable(frame, scene, t, out_w, out_h, rng)
 

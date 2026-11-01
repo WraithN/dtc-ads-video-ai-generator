@@ -86,6 +86,15 @@ def init() -> None:
         if "project_json" not in cols_r:
             conn.execute("ALTER TABLE renders ADD COLUMN project_json TEXT")
 
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS brand_kits (
+                product_key TEXT PRIMARY KEY,
+                name        TEXT,
+                brand_json  TEXT,
+                updated_at  REAL
+            )"""
+        )
+
 
 def _load_json(value: Optional[str], default: Any) -> Any:
     if not value:
@@ -297,4 +306,58 @@ def migrate_json() -> int:
             )
             count += 1
     return count
+
+
+# ---------------------------------------------------------------------------
+# Brand kits (per product, or the global default)
+# ---------------------------------------------------------------------------
+
+def upsert_brand_kit(product_key: str, name: str, brand_json: dict) -> dict:
+    """Insert or replace a brand kit for a product key. Returns the stored row."""
+    import time
+
+    with _LOCK, _conn() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO brand_kits
+               (product_key, name, brand_json, updated_at)
+               VALUES (?,?,?,?)""",
+            (
+                product_key,
+                name,
+                json.dumps(brand_json or {}, ensure_ascii=False),
+                time.time(),
+            ),
+        )
+    return get_brand_kit(product_key) or {}
+
+
+def get_brand_kit(product_key: str) -> dict | None:
+    with _LOCK, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM brand_kits WHERE product_key = ?", (product_key,)
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "product_key": row["product_key"],
+        "name": row["name"],
+        "brand": _load_json(row["brand_json"], {}),
+        "updated_at": row["updated_at"],
+    }
+
+
+def list_brand_kits() -> list[dict]:
+    with _LOCK, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM brand_kits ORDER BY updated_at DESC"
+        ).fetchall()
+    return [
+        {
+            "product_key": r["product_key"],
+            "name": r["name"],
+            "brand": _load_json(r["brand_json"], {}),
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    ]
 

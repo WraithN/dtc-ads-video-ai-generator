@@ -189,11 +189,55 @@ class Music:
 
 
 @dataclass
-class Brand:
+class BrandKit:
+    """Brand constraints baked into the IR so every render of the same
+    product looks like one coherent campaign.
+
+    This is the "brand constraint layer": instead of hoping batch renders
+    stay on-style, the colours, font, logo watermark and fixed CTA card are
+    stored on the Project and enforced by the compositor. Empty / None fields
+    mean "inherit the style default", so a minimal brand kit is a no-op.
+    """
+
     name: str = "BRAND"
     primary: str = "#FF3B30"
     accent: str = "#FFE500"
     ink: str = "#0B0B0F"
+    paper: str = "#FFFFFF"  # light surface (cards, CTA subline text)
+    logo_path: str = ""  # absolute path to a logo image; burned as a watermark
+    logo_opacity: float = 0.85
+    font_key: str = ""  # brand font (system font key); "" => style default
+    cta_text: str = ""  # fixed CTA card headline (e.g. "Shop now — 20% off")
+    cta_sub: str = ""  # fixed CTA card subline
+    watermark: bool = True  # show the logo watermark
+    # unified caption styling -- empty / None means "inherit per-scene style"
+    caption_mode: CaptionMode = "kinetic"
+    caption_position: Literal["bottom", "center", "top"] = "bottom"
+    caption_highlight: str = ""
+    caption_scale_pop: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "primary": self.primary,
+            "accent": self.accent,
+            "ink": self.ink,
+            "paper": self.paper,
+            "logo_path": self.logo_path,
+            "logo_opacity": round(self.logo_opacity, 4),
+            "font_key": self.font_key,
+            "cta_text": self.cta_text,
+            "cta_sub": self.cta_sub,
+            "watermark": self.watermark,
+            "caption_mode": self.caption_mode,
+            "caption_position": self.caption_position,
+            "caption_highlight": self.caption_highlight,
+            "caption_scale_pop": self.caption_scale_pop,
+        }
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "BrandKit":
+        return BrandKit(**_pick(BrandKit, d or {}))
 
 
 @dataclass
@@ -209,7 +253,7 @@ class Project:
     style: str = "dr_vsl"  # project default; scenes may override
     scenes: list[Scene] = field(default_factory=list)
     music: Music = field(default_factory=Music)
-    brand: Brand = field(default_factory=Brand)
+    brand: BrandKit = field(default_factory=BrandKit)
 
     # -- geometry ----------------------------------------------------------
     @property
@@ -230,12 +274,7 @@ class Project:
             "fps": self.fps,
             "style": self.style,
             "resolution": self.resolution,
-            "brand": {
-                "name": self.brand.name,
-                "primary": self.brand.primary,
-                "accent": self.brand.accent,
-                "ink": self.brand.ink,
-            },
+            "brand": self.brand.to_dict(),
             "music": {
                 "track": self.music.track,
                 "volume": self.music.volume,
@@ -278,7 +317,7 @@ class Project:
         # fields each node declares, so an unknown key is ignored rather than
         # raising `TypeError: unexpected keyword argument` on resume. This is
         # what keeps the project_json column in the history DB forward-safe.
-        p.brand = Brand(**_pick(Brand, d.get("brand") or {}))
+        p.brand = BrandKit.from_dict(d.get("brand") or {})
         p.music = Music(**_pick(Music, d.get("music") or {}))
 
         scenes: list[Scene] = []

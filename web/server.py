@@ -30,6 +30,7 @@ from avb.config import (
     write_env, save_config,
 )
 from avb.parse import parse_script, parse_script_llm
+from avb.brand import apply_brand_to_project, DEFAULT_BRAND_KEY
 from avb.brief import generate_scripts_detailed
 from avb.pipeline import Pipeline
 from avb.edit import apply_plan
@@ -49,6 +50,9 @@ from web.history_db import (
     select_script as db_select_script,
     init as _init_history,
     migrate_json as _migrate_history,
+    upsert_brand_kit as db_upsert_brand_kit,
+    get_brand_kit as db_get_brand_kit,
+    list_brand_kits as db_list_brand_kits,
 )
 
 load_dotenv()
@@ -456,6 +460,10 @@ class GenerateRequest(BaseModel):
     voice_provider: str | None = None
     out_name: str | None = None
     resolution: str = "1080p"
+    product: str = ""
+    product_traits: str = ""
+    brand: dict | None = None
+    brand_product: str | None = None
 
 
 class EditRequest(BaseModel):
@@ -769,6 +777,50 @@ async def list_templates():
     return {"templates": template_keys(), "default": "pain_hook"}
 
 
+# ---------------------------------------------------------------------------
+# Routes: brand constraint layer
+# ---------------------------------------------------------------------------
+class BrandRequest(BaseModel):
+    product: str = ""  # empty => the global default kit
+    brand: dict = {}
+
+
+@app.get("/api/brand")
+async def get_brand(product: str = ""):
+    """Return the stored brand kit for a product, or the global default.
+
+    ``product`` is optional: when omitted (or not found) the global default
+    kit is returned. Always 200 with a ``brand`` payload (possibly empty).
+    """
+    key = product.strip() or DEFAULT_BRAND_KEY
+    row = db_get_brand_kit(key)
+    if not row:
+        row = db_get_brand_kit(DEFAULT_BRAND_KEY)
+    return {
+        "product_key": (row or {}).get("product_key", key),
+        "name": (row or {}).get("name", ""),
+        "brand": (row or {}).get("brand", {}),
+    }
+
+
+@app.put("/api/brand")
+async def put_brand(req: BrandRequest):
+    """Store (upsert) a brand kit for a product, or the global default.
+
+    ``product`` empty => the global default kit. The ``brand`` dict is stored
+    as-is (partial kits are fine; the IR fills the rest from defaults).
+    """
+    key = req.product.strip() or DEFAULT_BRAND_KEY
+    db_upsert_brand_kit(key, req.brand.get("name", "") if isinstance(req.brand, dict) else "", req.brand or {})
+    return {"ok": True, "product_key": key}
+
+
+@app.get("/api/brand/list")
+async def list_brands():
+    """All stored brand kits (for the brand picker UI)."""
+    return {"kits": db_list_brand_kits()}
+
+
 @app.get("/api/providers")
 async def list_providers():
     from avb.assets.voice import build_voice_provider
@@ -824,6 +876,11 @@ class PlanRequest(BaseModel):
     # visual prompt so the video model keeps the same product across shots.
     product: str = ""
     product_traits: str = ""
+    # Brand constraint layer: an inline brand kit (subset of BrandKit fields)
+    # and/or a stored kit keyed by product. Inline wins; brand_product loads
+    # the persisted kit for that product (or the global default when omitted).
+    brand: dict | None = None
+    brand_product: str | None = None
 
 
 class ScriptsRequest(BaseModel):
@@ -1019,6 +1076,30 @@ def _apply_scene_overrides(project: object, overrides: list[dict]) -> int:
     return changed
 
 
+def _resolve_brand(params: dict) -> dict | None:
+    """Pick the brand kit to apply for a request.
+
+    Priority: inline ``brand`` dict overrides a stored kit; ``brand_product``
+    loads that product's persisted kit (falling back to the global default);
+    if neither references a stored kit, the global default is still applied
+    when present. ``None`` means "no brand constraint" (style defaults win).
+    """
+    brand = params.get("brand")
+    product = params.get("brand_product")
+    base: dict | None = None
+    if product:
+        stored = db_get_brand_kit(product) or db_get_brand_kit(DEFAULT_BRAND_KEY)
+        if stored and stored.get("brand"):
+            base = stored["brand"]
+    else:
+        default = db_get_brand_kit(DEFAULT_BRAND_KEY)
+        if default and default.get("brand"):
+            base = default["brand"]
+    if isinstance(brand, dict):
+        base = {**(base or {}), **brand}
+    return base or None
+
+
 @app.post("/api/plan")
 async def create_plan(req: PlanRequest):
     """Script -> scenes. No TTS, no video, no spend. Background job (see /api/scripts)."""
@@ -1056,6 +1137,9 @@ async def create_plan(req: PlanRequest):
             if not getattr(project, "scenes", None):
                 _fail_job(job_id, "没能从脚本里解析出任何场景，请换一段文案试试")
                 return
+            # Brand constraint layer: fold the resolved kit into the IR so the
+            # stored project (and every downstream render) stays on-style.
+            apply_brand_to_project(project, _resolve_brand(params))
             plan_id = uuid.uuid4().hex[:12]
             _plans[plan_id] = {
                 "project": project,
@@ -1453,6 +1537,10 @@ def _run_pipeline(job_id: str, params: dict):
         chosen_resolution = (params.get("resolution") or "1080p").strip()
         if chosen_resolution:
             project.resolution = chosen_resolution
+
+        # Brand constraint layer: fold the resolved kit into the IR so the
+        # rendered video (and the stored project_json) stays on-style.
+        apply_brand_to_project(project, _resolve_brand(params))
 
         _update_job(job_id, stage="synth", progress=0.15,
                      message=f"Parsed {len(project.scenes)} scenes, synthesizing voiceover...")
