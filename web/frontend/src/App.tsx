@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toaster, toast } from 'sonner'
-import { AlertTriangle, Download, History as HistoryIcon, Settings as SettingsIcon, Sparkles, Terminal, Wand2 } from 'lucide-react'
+import { AlertTriangle, Download, History as HistoryIcon, Layers, Settings as SettingsIcon, Sparkles, Terminal, Wand2 } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { ProviderSettings } from '@/components/ProviderSettings'
 import { type GeneratePayload } from '@/components/ScriptPanel'
@@ -16,6 +16,7 @@ import { PreviewCard } from '@/components/PreviewCard'
 import { EditPanel } from '@/components/EditPanel'
 import { DownloadPanel } from '@/components/DownloadPanel'
 import { BrandPanel } from '@/components/BrandPanel'
+import { VariantsPage } from '@/components/VariantsPage'
 import type { BrandDraft } from '@/lib/api'
 import { LogPanel } from '@/components/LogPanel'
 import { TaskPanel, type ActiveTask, type TaskKind } from '@/components/TaskPanel'
@@ -29,7 +30,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type Page = 'settings' | 'history' | 'create'
+type Page = 'settings' | 'history' | 'create' | 'variants'
 
 export default function App() {
   const { t } = useTranslation()
@@ -357,6 +358,7 @@ export default function App() {
           {(
             [
               ['create', Sparkles, t('nav.create')],
+              ['variants', Layers, t('nav.variants')],
               ['history', HistoryIcon, t('nav.history')],
               ['settings', SettingsIcon, t('nav.settings')],
             ] as const
@@ -385,8 +387,10 @@ export default function App() {
       </nav>
 
       <main className="mx-auto max-w-[1400px] px-6 py-6">
-        {/* ==================================================== history */}
-        {page === 'history' ? (
+        {/* ==================================================== variants */}
+        {page === 'variants' ? (
+          <VariantsPage />
+        ) : page === 'history' ? (
           <HistoryPage
             renders={renders}
             scripts={scriptHistory}

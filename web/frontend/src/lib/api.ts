@@ -431,6 +431,82 @@ export const api = {
     json<{ kits: { product_key: string; name: string; brand: BrandDraft }[] }>(
       '/api/brand/list',
     ),
+
+  /** A/B variant management: list every stored variant set (summaries). */
+  variantSets: () => json<{ sets: VariantSetSummary[] }>('/api/variant-sets'),
+
+  /** A/B variant management: generate N variants of one product (sync, free). */
+  createVariantSet: (payload: CreateVariantSetPayload) =>
+    json<VariantSet>('/api/variant-sets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** A/B variant management: fetch one set with its expanded members. */
+  variantSet: (id: string) => json<VariantSet>(`/api/variant-sets/${id}`),
+
+  /** A/B variant management: the zip export URL for a set (IR json + CSV). */
+  variantSetExportUrl: (id: string) => `/api/variant-sets/${id}/export`,
+}
+
+/** A single A/B variant: one SceneGraph IR built from a template/style/voice/framework combo. */
+export interface VariantMember {
+  member_id: string
+  idx: number
+  label: string
+  template: string
+  style: string
+  voice: string
+  framework: string
+  script: string
+  project_json: string
+  status: string
+  render_id: string | null
+  created_at: number
+  /** Scene count decoded from project_json (added by the server). */
+  scenes: number
+}
+
+/** A full variant set as returned by create / detail endpoints (members expanded). */
+export interface VariantSet {
+  set_id: string
+  product: string
+  name: string
+  script: string
+  params: {
+    count: number
+    styles: string[]
+    templates: string[]
+    voices: string[]
+    frameworks: string[]
+    language: string
+  }
+  created_at: number
+  members: VariantMember[]
+}
+
+/** A variant set summary, as listed by GET /api/variant-sets (no members). */
+export interface VariantSetSummary {
+  set_id: string
+  product: string
+  name: string
+  script: string
+  params: VariantSet['params']
+  created_at: number
+  member_count: number
+}
+
+export interface CreateVariantSetPayload {
+  product: string
+  name?: string
+  script: string
+  count?: number
+  language: string
+  styles?: string[]
+  templates?: string[]
+  voices?: string[]
+  frameworks?: string[]
 }
 
 /** Toast on failure, return the message so callers can also show it inline. */
