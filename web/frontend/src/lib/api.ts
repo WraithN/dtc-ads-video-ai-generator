@@ -214,6 +214,23 @@ export interface EditPlanResult {
   rebuilt?: string[]
 }
 
+/** A brand kit (subset of the backend BrandKit fields). Sent with plan requests. */
+export interface BrandDraft {
+  name?: string
+  primary?: string
+  accent?: string
+  ink?: string
+  paper?: string
+  logo_path?: string
+  logo_opacity?: number
+  font_key?: string
+  cta_text?: string
+  cta_sub?: string
+  watermark?: boolean
+  caption_position?: string
+  caption_highlight?: string
+}
+
 async function json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const r = await fetch(input, init)
   const text = await r.text()
@@ -290,6 +307,9 @@ export const api = {
     /** Threads a "subject on screen" anchor into every visual prompt. */
     product?: string
     product_traits?: string
+    /** Brand constraint layer: an inline kit, or a key to a stored kit. */
+    brand?: BrandDraft | null
+    brand_product?: string | null
   }) =>
     json<{ job_id: string }>('/api/plan', {
       method: 'POST',
@@ -391,6 +411,26 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ render_id }),
     }),
+
+  /** Brand constraint layer: fetch the stored kit for a product (or default). */
+  brandGet: (product?: string) =>
+    json<{ product_key: string; name: string; brand: BrandDraft }>(
+      `/api/brand${product ? `?product=${encodeURIComponent(product)}` : ''}`,
+    ),
+
+  /** Brand constraint layer: store (upsert) a kit for a product (or default). */
+  brandPut: (product: string, brand: BrandDraft) =>
+    json<{ ok: boolean; product_key: string }>('/api/brand', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product, brand }),
+    }),
+
+  /** Brand constraint layer: list every stored kit. */
+  brandList: () =>
+    json<{ kits: { product_key: string; name: string; brand: BrandDraft }[] }>(
+      '/api/brand/list',
+    ),
 }
 
 /** Toast on failure, return the message so callers can also show it inline. */

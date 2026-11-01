@@ -15,6 +15,8 @@ import { StatusCard } from '@/components/StatusCard'
 import { PreviewCard } from '@/components/PreviewCard'
 import { EditPanel } from '@/components/EditPanel'
 import { DownloadPanel } from '@/components/DownloadPanel'
+import { BrandPanel } from '@/components/BrandPanel'
+import type { BrandDraft } from '@/lib/api'
 import { LogPanel } from '@/components/LogPanel'
 import { TaskPanel, type ActiveTask, type TaskKind } from '@/components/TaskPanel'
 import { Badge } from '@/components/ui/primitives'
@@ -56,6 +58,9 @@ export default function App() {
     targetSeconds: number | null
   } | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
+  /** Brand constraint layer: the kit chosen in BrandPanel, sent with the plan. */
+  const [brandDraft, setBrandDraft] = useState<BrandDraft | null>(null)
+  const [brandProduct, setBrandProduct] = useState<string>('')
   /** The generation task currently running (scripts / plan / render). */
   const [task, setTask] = useState<ActiveTask | null>(null)
   /** Past renders kept by the server, newest first. */
@@ -131,6 +136,8 @@ export default function App() {
           language: p.language,
           product: p.product ?? '',
           product_traits: p.product_traits ?? '',
+          brand: brandDraft,
+          brand_product: brandProduct || null,
         }),
       )
       setPlan(r)
@@ -436,20 +443,31 @@ export default function App() {
                     scripts, the user's edits and the selected concept when
                     they came back from the storyboard step. */}
                 {settings ? (
-                  <div className={cn(step === 'script' ? 'animate-fade-in' : 'hidden')}>
-                    <BriefPanel
-                      settings={settings}
-                      planBusy={task?.kind === 'plan'}
-                      scriptsBusy={task?.kind === 'scripts'}
-                      runScripts={async (payload) => {
-                        const r = await runScripts(payload)
-                        if (r.script_id) lastScriptIdRef.current = r.script_id
-                        return r
-                      }}
-                      onScriptsReady={() => setHasScripts(true)}
-                      onPlan={makePlan}
-                    />
-                  </div>
+                  <>
+                    <div className={cn(step === 'script' ? 'animate-fade-in' : 'hidden')}>
+                      <BriefPanel
+                        settings={settings}
+                        planBusy={task?.kind === 'plan'}
+                        scriptsBusy={task?.kind === 'scripts'}
+                        runScripts={async (payload) => {
+                          const r = await runScripts(payload)
+                          if (r.script_id) lastScriptIdRef.current = r.script_id
+                          return r
+                        }}
+                        onScriptsReady={() => setHasScripts(true)}
+                        onPlan={makePlan}
+                      />
+                    </div>
+
+                    <div className={cn(step === 'script' ? 'animate-fade-in' : 'hidden')}>
+                      <BrandPanel
+                        onChange={(b, pk) => {
+                          setBrandDraft(b)
+                          setBrandProduct(pk)
+                        }}
+                      />
+                    </div>
+                  </>
                 ) : (
                   <div className="rounded-xl border bg-card p-5 text-sm text-muted-foreground shadow-sm">
                     Loading settings…

@@ -446,6 +446,34 @@ const en: typeof zh = {
       'No usable video provider yet: open Settings, pick a vendor, fill in its API key, and save.',
     generateFailed: 'Submit failed: {{msg}}',
   },
+
+  brand: {
+    title: 'Brand kit',
+    subtitle:
+      'Define one brand kit per product — colours, logo, a fixed CTA card, font and caption style. Every render of the product stays on-style, so batch generation never drifts.',
+    productKey: 'Product key',
+    productKeyPlaceholder: 'e.g. acme-charger (blank = global default)',
+    productKeyHint: 'The kit is saved under this key and reused on the next run for the same product.',
+    name: 'Brand name',
+    namePlaceholder: 'e.g. Acme',
+    primary: 'Primary',
+    accent: 'Accent',
+    ink: 'Ink (dark surface)',
+    paper: 'Paper (light surface)',
+    logo: 'Logo watermark',
+    logoUpload: 'Upload logo',
+    logoSet: 'Logo attached',
+    watermark: 'Show logo watermark',
+    font: 'Brand font',
+    cta: 'Fixed CTA card',
+    ctaTextPlaceholder: 'e.g. Shop now — 20% off',
+    ctaSubPlaceholder: 'e.g. Free shipping',
+    captionPosition: 'Caption position',
+    captionHighlight: 'Caption highlight (blank = inherit)',
+    save: 'Save brand kit',
+    saving: 'Saving…',
+    saved: 'Brand kit saved',
+  },
 }
 
 export default en
