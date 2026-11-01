@@ -59,16 +59,41 @@ from web.history_db import (
     get_variant_set as db_get_variant_set,
     list_variant_sets as db_list_variant_sets,
     aggregate_cost as db_aggregate_cost,
+    find_active_renders as db_find_active_renders,
+    set_render_status as db_set_render_status,
 )
 
 load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Remember the main loop so worker threads can schedule broadcasts."""
+    """Remember the main loop so worker threads can schedule broadcasts, and
+    re-queue any render that was 'running' when we last stopped (crash
+    recovery)."""
     global _main_loop
     _main_loop = asyncio.get_running_loop()
+    _recover_active_renders(_main_loop)
     yield
+
+
+def _recover_active_renders(loop) -> list[str]:
+    """Re-queue renders that were 'running' when the server last stopped.
+
+    A crash / restart leaves them with no live in-memory job, so they would
+    sit forever as 'running' in history. We flip each to 'interrupted' (a
+    terminal state, so a *future* restart won't re-recover it) and launch a
+    resume that re-runs the film. The content-addressed cache makes that
+    cheap: any scene that already finished on disk is reused, not re-billed,
+    so recovering a half-done render costs only the scenes that never landed.
+    """
+    recovered = []
+    for rec in db_find_active_renders():
+        rid = rec["render_id"]
+        db_set_render_status(rid, "interrupted")
+        new_job = _new_job("render")
+        loop.run_in_executor(None, _run_resume, new_job, rid, None, None)
+        recovered.append(rid)
+    return recovered
 
 
 app = FastAPI(title="AI Video Builder", version="0.3.0", lifespan=lifespan)
@@ -1463,6 +1488,22 @@ def _run_render(job_id: str, params: dict):
             "with_voice": want_voice,
             "with_captions": want_captions,
         }
+        config = {
+            "style": chosen_style or project.style,
+            "resolution": chosen_resolution or "1080p",
+            "aspect": project.aspect,
+            "video_provider": params.get("video_provider") or cfg0.video.provider,
+            "target_seconds": target,
+            "with_voice": want_voice,
+            "with_captions": want_captions,
+        }
+        # Durably mark this render as 'running' BEFORE we spend money. If the
+        # server dies mid-render (crash / restart / OOM), the row stays
+        # 'running' and is auto-recovered on the next boot -- the cache makes
+        # the re-run cheap because finished scenes are reused, not re-billed.
+        _record_render(render_id=job_id, job_id=job_id, plan_id=params["plan_id"],
+                       name=name, config=config, project=project, report=None,
+                       status="running")
         report = pipe.run(
             project, out_path,
             target_seconds=target,
@@ -1475,15 +1516,6 @@ def _run_render(job_id: str, params: dict):
             return len(v) if isinstance(v, (list, tuple)) else (v or 0)
 
         status = "partial" if getattr(report, "warnings", None) else "done"
-        config = {
-            "style": chosen_style or project.style,
-            "resolution": chosen_resolution or "1080p",
-            "aspect": project.aspect,
-            "video_provider": params.get("video_provider") or cfg0.video.provider,
-            "target_seconds": target,
-            "with_voice": want_voice,
-            "with_captions": want_captions,
-        }
         _record_render(render_id=job_id, job_id=job_id, plan_id=params["plan_id"],
                        name=name, config=config, project=project, report=report,
                        status=status)
@@ -1579,6 +1611,12 @@ def _run_resume(job_id: str, src_render_id: str, only: set[str] | None, out_name
 
         n_total = len(project.scenes)
         pipe.video_progress_cb = _video_progress_cb(job_id, n_total)
+        # Mark running durably so a second crash during recovery is itself
+        # recoverable on the next boot (its parent was already flipped to
+        # 'interrupted' by _recover_active_renders, breaking the loop).
+        _record_render(render_id=job_id, job_id=job_id, plan_id=plan_id, name=name,
+                       config=rec.get("config", {}), project=project, report=None,
+                       status="running", parent_id=src_render_id)
         report = pipe.run(project, path, only=only, reference_images=ref_images or None,
                           with_voice=want_voice, with_captions=want_captions)
 

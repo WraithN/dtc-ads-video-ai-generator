@@ -244,6 +244,28 @@ def _row_to_render(row: sqlite3.Row) -> dict:
     }
 
 
+def find_active_renders() -> list[dict]:
+    """Renders left in 'running' state -- i.e. interrupted by a crash or
+    restart before they could record a terminal status. Returned so the
+    server can re-queue them on boot instead of leaving them orphaned."""
+    with _LOCK, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM renders WHERE status = 'running' ORDER BY created_at ASC"
+        ).fetchall()
+    return [_row_to_render(r) for r in rows]
+
+
+def set_render_status(render_id: str, status: str) -> None:
+    """Patch just the status column. Used to flip an interrupted 'running'
+    render to a terminal state ('interrupted') during crash recovery so a
+    future restart doesn't try to recover the same row again."""
+    with _LOCK, _conn() as conn:
+        conn.execute(
+            "UPDATE renders SET status = ? WHERE render_id = ?",
+            (status, render_id),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Scripts
 # ---------------------------------------------------------------------------
