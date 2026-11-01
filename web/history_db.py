@@ -185,6 +185,44 @@ def get_render(render_id: str) -> dict | None:
     return _row_to_render(row) if row else None
 
 
+def aggregate_cost() -> dict:
+    """Roll up spend across every recorded render.
+
+    Returns a total, a per-provider breakdown (provider taken from the stored
+    ``config.video_provider``, since the cost row itself is provider-agnostic),
+    and a per-day series for the last 30 days. Used by ``GET /api/cost`` so the
+    user can see where the billed-API dollars actually went without grepping
+    the SQLite file by hand.
+    """
+    with _LOCK, _conn() as conn:
+        total = conn.execute(
+            "SELECT COALESCE(SUM(cost), 0) FROM renders"
+        ).fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM renders").fetchone()[0]
+        by_provider: dict[str, float] = {}
+        for provider, c in conn.execute(
+            """SELECT COALESCE(json_extract(config, '$.video_provider'), 'unknown'),
+                      COALESCE(SUM(cost), 0)
+               FROM renders GROUP BY 1 ORDER BY 2 DESC"""
+        ):
+            by_provider[provider] = round(float(c), 6)
+        by_day = []
+        for day, c, n in conn.execute(
+            """SELECT date(created_at, 'unixepoch'),
+                      COALESCE(SUM(cost), 0), COUNT(*)
+               FROM renders
+               WHERE created_at IS NOT NULL
+               GROUP BY 1 ORDER BY 1 DESC LIMIT 30"""
+        ):
+            by_day.append({"day": day, "cost": round(float(c), 6), "renders": n})
+    return {
+        "total": round(float(total), 6),
+        "count": count,
+        "by_provider": by_provider,
+        "by_day": by_day,
+    }
+
+
 def _row_to_render(row: sqlite3.Row) -> dict:
     return {
         "render_id": row["render_id"],

@@ -193,3 +193,41 @@ def test_generate_retries_download_on_same_job(monkeypatch, tmp_path):
     assert p.attempts == 1       # submit+poll ran once -- no double billing
     assert calls["n"] == 3       # two failed downloads + one success
     assert result.path.is_file()
+
+
+def test_backoff_is_exponential(monkeypatch, tmp_path):
+    """Retry pauses must grow exponentially (2, 4, 8 ...) up to the cap.
+
+    A provider that fails twice then succeeds must wait ~2s then ~4s, never
+    the old fixed (2, 5) linear schedule. Captured via a spy on time.sleep.
+    """
+    slept = []
+
+    def spy_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(time, "sleep", spy_sleep)
+    monkeypatch.setattr("avb.assets.video.requests.get", lambda *a, **kw: _FakeResponse())
+    p = _StubProvider([TimeoutError("blip"), ConnectionError("reset")])
+    result = _generate(p, Cache(tmp_path / "cache"))
+    assert p.attempts == 3  # two failures + one success
+    assert result.path.is_file()
+    assert slept == [2.0, 4.0], slept
+
+
+def test_backoff_respects_cap(monkeypatch, tmp_path):
+    """With a low cap the schedule never exceeds it (gives up after max)."""
+    slept = []
+
+    def spy_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(time, "sleep", spy_sleep)
+    monkeypatch.setattr("avb.assets.video.requests.get", lambda *a, **kw: _FakeResponse())
+    p = _StubProvider([TimeoutError("t")] * 5)
+    p.backoff_base = 1.0
+    p.backoff_max = 1.5
+    with pytest.raises(VideoGenError):
+        _generate(p, Cache(tmp_path / "cache"))
+    # attempt1->1s, attempt2->1.5s (capped); gives up after max_attempts.
+    assert slept == [1.0, 1.5], slept

@@ -256,9 +256,18 @@ class _AsyncVideoBase(Provider):
     # vendor blip, tight enough that a dead account is obvious in under a
     # minute rather than after eight scenes times three tries each.
     max_attempts = 3
-    # Pause before retry N+1. Kept short: these are billed APIs, so a retry
-    # should feel like a hiccup, not a coffee break.
-    _backoff = (2.0, 5.0)
+    # Exponential backoff between retries. Retry N waits
+    # min(backoff_max, backoff_base * 2 ** (N - 1)) seconds: 2s, 4s, 8s, ...
+    # capped at 30s. A billed API hates long stalls, so the base is small and
+    # the cap keeps a dead account from sleeping for minutes across many
+    # scenes; exponential (not linear) means a brief vendor hiccup is absorbed
+    # quickly while a longer outage still backs off instead of hammering.
+    backoff_base = 2.0
+    backoff_max = 30.0
+
+    def _pause_for(self, attempt: int) -> float:
+        """Seconds to wait before retry attempt N (1-indexed)."""
+        return min(self.backoff_max, self.backoff_base * (2 ** (attempt - 1)))
 
     def generate(
         self, prompt: str, style: str, seed: int, seconds: float, w: int, h: int,
@@ -308,7 +317,7 @@ class _AsyncVideoBase(Provider):
                 if not err.retryable or attempt >= self.max_attempts:
                     self._report(phase="failed", attempt=attempt, error=str(err)[:300])
                     raise err from e
-                pause = self._backoff[min(attempt - 1, len(self._backoff) - 1)]
+                pause = self._pause_for(attempt)
                 self._report(phase="retrying", attempt=attempt,
                              wait_s=pause, error=str(err)[:200])
                 print(f"  !! {self.name}: {err} -- retrying "
@@ -345,7 +354,7 @@ class _AsyncVideoBase(Provider):
                 if not err.retryable or attempt >= self.max_attempts:
                     self._report(phase="failed", attempt=attempt, error=str(err)[:300])
                     raise err from e
-                pause = self._backoff[min(attempt - 1, len(self._backoff) - 1)]
+                pause = self._pause_for(attempt)
                 self._report(phase="retrying_download", attempt=attempt, wait_s=pause)
                 print(f"  !! {self.name}: download failed ({err}); "
                       f"retrying in {pause:.0f}s", file=sys.stderr)

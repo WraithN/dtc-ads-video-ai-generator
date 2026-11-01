@@ -58,6 +58,7 @@ from web.history_db import (
     create_variant_set as db_create_variant_set,
     get_variant_set as db_get_variant_set,
     list_variant_sets as db_list_variant_sets,
+    aggregate_cost as db_aggregate_cost,
 )
 
 load_dotenv()
@@ -1014,6 +1015,17 @@ async def list_providers():
         "voice": {"active": voice.name, "available": voice.available()},
         "video": {"active": active, "error": err, "providers": v_status},
     }
+
+
+@app.get("/api/cost")
+async def get_cost():
+    """Aggregate billed-API spend across every recorded render.
+
+    Returns total, a per-provider breakdown (provider read from each render's
+    stored config) and a per-day series. Lets the user see where the video
+    generation dollars went without poking the SQLite file directly.
+    """
+    return db_aggregate_cost()
 
 
 # ---------------------------------------------------------------------------
