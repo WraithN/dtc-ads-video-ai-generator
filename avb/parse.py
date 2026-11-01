@@ -21,6 +21,7 @@ from dataclasses import replace
 
 from .ir import Beat, CaptionStyle, Project, Scene, Sfx, Visual, Voiceover
 from .styles import get_style, motion_for, visual_kind_for
+from .templates import apply_template_to_project, get_template
 
 # --------------------------------------------------------------------------
 # Beat classification
@@ -482,6 +483,7 @@ def parse_script(
     script_language: str | None = None,
     product: str = "",
     product_traits: str = "",
+    template: str = "flexible",
 ) -> Project:
     """Turn a plain-text ad script into a SceneGraph IR.
 
@@ -556,6 +558,10 @@ def parse_script(
         )
 
     project.scenes = scenes
+    # Pin the narrative structure to a DTC template when one is chosen. This is
+    # what makes the output stable instead of whatever the keyword classifier
+    # happened to guess: the same product always gets the same beat skeleton.
+    apply_template_to_project(project, template)
     return project
 
 
@@ -594,6 +600,7 @@ def _llm_user_prompt(
     language: str | None = None,
     product: str = "",
     product_traits: str = "",
+    template: str = "flexible",
 ) -> str:
     """Build the user turn: the script plus its hard constraints.
 
@@ -602,6 +609,14 @@ def _llm_user_prompt(
     repeated here because it is the single most-violated instruction.
     """
     parts: list[str] = []
+    spec = get_template(template)
+    if spec.key != "flexible" and spec.beats:
+        seq = " → ".join(spec.beats)
+        parts.append(
+            f"This is a '{spec.label}' ad. Follow this beat sequence exactly, in "
+            f"order, one beat per shot group where possible: {seq}. "
+            "Honour the structure -- do not reorganise the narrative."
+        )
     if language:
         parts.append(f"The script is written in {language}. Keep the spoken text verbatim in that language.")
     if target_seconds:
@@ -699,6 +714,7 @@ def parse_script_llm(
         kwargs.get("script_language") or kwargs.get("language"),
         kwargs.get("product"),
         kwargs.get("product_traits"),
+        kwargs.get("template", "flexible"),
     )
 
     # Legacy fallback: bare OPENAI_API_KEY with no config file.
@@ -814,4 +830,8 @@ def _project_from_shots(script: str, shots: list, **kwargs) -> Project:
             )
         )
     project.scenes = scenes
+    # Pin the narrative structure to a DTC template when one is chosen. The
+    # heuristic path above does the same, so both routes land on identical
+    # structure for the same template -- the whole point of having a template.
+    apply_template_to_project(project, kwargs.get("template", "flexible"), anchor)
     return project

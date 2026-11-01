@@ -447,6 +447,7 @@ class GenerateRequest(BaseModel):
     script: str
     name: str = "untitled"
     style: str = "dr_vsl"
+    template: str = "pain_hook"
     aspect: str = "9:16"
     fps: int = 30
     draft: bool = False
@@ -760,6 +761,14 @@ async def update_settings(req: SettingsUpdate):
 # ---------------------------------------------------------------------------
 # Routes: providers
 # ---------------------------------------------------------------------------
+@app.get("/api/templates")
+async def list_templates():
+    """The DTC ad-template menu (UGC 口播 / 产品特写 / 对比类 / 痛点钩子 ...)."""
+    from avb.templates import template_keys
+
+    return {"templates": template_keys(), "default": "pain_hook"}
+
+
 @app.get("/api/providers")
 async def list_providers():
     from avb.assets.voice import build_voice_provider
@@ -805,6 +814,7 @@ class PlanRequest(BaseModel):
     script: str
     name: str = "untitled"
     style: str = "dr_vsl"
+    template: str = "pain_hook"
     use_llm: bool = True
     target_seconds: float | None = None
     # Language the script is written in. The director model is told so it
@@ -1032,6 +1042,7 @@ async def create_plan(req: PlanRequest):
                     script_language=params.get("language"),
                     product=params.get("product", ""),
                     product_traits=params.get("product_traits", ""),
+                    template=params.get("template", "pain_hook"),
                 )
             else:
                 project = parse_script(
@@ -1040,6 +1051,7 @@ async def create_plan(req: PlanRequest):
                     script_language=params.get("language"),
                     product=params.get("product", ""),
                     product_traits=params.get("product_traits", ""),
+                    template=params.get("template", "pain_hook"),
                 )
             if not getattr(project, "scenes", None):
                 _fail_job(job_id, "没能从脚本里解析出任何场景，请换一段文案试试")
@@ -1432,9 +1444,11 @@ def _run_pipeline(job_id: str, params: dict):
 
         # Parse
         if params.get("use_llm", True):
-            project = parse_script_llm(script, name=name, style=params.get("style", "dr_vsl"))
+            project = parse_script_llm(script, name=name, style=params.get("style", "dr_vsl"),
+                                      template=params.get("template", "pain_hook"))
         else:
-            project = parse_script(script, name=name, style=params.get("style", "dr_vsl"))
+            project = parse_script(script, name=name, style=params.get("style", "dr_vsl"),
+                                  template=params.get("template", "pain_hook"))
 
         chosen_resolution = (params.get("resolution") or "1080p").strip()
         if chosen_resolution:

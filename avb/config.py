@@ -120,6 +120,7 @@ class Config:
     # --- project ---
     project_name: str = "untitled"
     style: str = "dr_vsl"
+    template: str = "pain_hook"
     aspect: str = "9:16"
     workdir: str = ".avb"
     # --- sections ---
@@ -172,6 +173,7 @@ _ENV_MAP = {
     "AVB_VIDEO_MAX_USD": ("video", "max_usd_per_run"),
     "AVB_WORKDIR": ("workdir", None),
     "AVB_STYLE": ("style", None),
+    "AVB_TEMPLATE": ("template", None),
     "AVB_ASPECT": ("aspect", None),
     "AVB_RENDER_WIDTH": ("render", "width"),
     "AVB_RENDER_HEIGHT": ("render", "height"),
@@ -392,7 +394,7 @@ def _render_toml(cfg: Config) -> str:
             lines.append(f"{k} = {_toml_value(v)}")
         lines.append("")
     lines.append("# top-level")
-    for k in ("project_name", "style", "aspect", "workdir", "qc_max_caption_offset_ms", "qc_min_silence_s"):
+    for k in ("project_name", "style", "template", "aspect", "workdir", "qc_max_caption_offset_ms", "qc_min_silence_s"):
         lines.append(f"{k} = {_toml_value(d[k])}")
     lines.append("")
     return "\n".join(lines)
