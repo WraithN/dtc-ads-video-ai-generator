@@ -9,6 +9,7 @@ Run:  python -m web.server   (or  uvicorn web.server:app --port 8787)
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
@@ -16,11 +17,12 @@ import shutil
 import threading
 import time
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -53,6 +55,9 @@ from web.history_db import (
     upsert_brand_kit as db_upsert_brand_kit,
     get_brand_kit as db_get_brand_kit,
     list_brand_kits as db_list_brand_kits,
+    create_variant_set as db_create_variant_set,
+    get_variant_set as db_get_variant_set,
+    list_variant_sets as db_list_variant_sets,
 )
 
 load_dotenv()
@@ -819,6 +824,169 @@ async def put_brand(req: BrandRequest):
 async def list_brands():
     """All stored brand kits (for the brand picker UI)."""
     return {"kits": db_list_brand_kits()}
+
+
+# ---------------------------------------------------------------------------
+# Routes: variant sets (A/B testing)
+# ---------------------------------------------------------------------------
+class VariantSetRequest(BaseModel):
+    product: str = ""
+    name: str = ""
+    script: str
+    count: int = 5
+    language: str = "en"
+    # Optional pools to draw combinations from; sensible defaults applied.
+    styles: list[str] | None = None
+    templates: list[str] | None = None
+    voices: list[str] | None = None
+    frameworks: list[str] | None = None
+
+
+_DEFAULT_STYLES = ["dr_vsl", "ugc", "comic", "vector", "cinematic"]
+_DEFAULT_TEMPLATES = ["pain_hook", "ugc_talk", "product_hero", "comparison", "talking_expert"]
+_DEFAULT_VOICES = ["adam", "aria", "bella", "antoni"]
+_DEFAULT_FRAMEWORKS = ["pain_solution", "review_proof", "grass_planting", "story_drama"]
+
+
+@app.post("/api/variant-sets")
+async def create_variant_set_endpoint(req: VariantSetRequest):
+    """Generate N ad variants of one product for A/B testing.
+
+    Each variant is a distinct SceneGraph IR produced by combining a template,
+    a visual style, a voice and a brief framework. Generation is plan-level
+    only (no TTS / no video), so it is cheap and runs synchronously. The
+    product's stored brand kit is applied so the variants stay on-style.
+    """
+    from avb.parse import parse_script
+
+    script = (req.script or "").strip()
+    if not script:
+        raise HTTPException(400, "请先粘贴广告脚本")
+    count = max(1, min(int(req.count or 5), 20))
+
+    styles = req.styles or _DEFAULT_STYLES
+    templates = req.templates or _DEFAULT_TEMPLATES
+    voices = req.voices or _DEFAULT_VOICES
+    frameworks = req.frameworks or _DEFAULT_FRAMEWORKS
+
+    set_id = uuid.uuid4().hex[:12]
+    name = req.name.strip() or f"variants-{set_id}"
+    members: list[dict] = []
+    for i in range(count):
+        tpl = templates[i % len(templates)]
+        style = styles[i % len(styles)]
+        voice = voices[i % len(voices)]
+        fw = frameworks[i % len(frameworks)]
+        label = f"{tpl} · {style} · {voice}"
+        try:
+            proj = parse_script(
+                script, name=f"{name}-{i+1}", style=style, template=tpl,
+                script_language=req.language, product=req.product,
+            )
+        except Exception as e:
+            raise HTTPException(400, f"变体 {i+1} 解析失败：{e}")
+        # Keep brand consistency across the whole set (P2 integration).
+        apply_brand_to_project(proj, _resolve_brand({"brand_product": req.product} if req.product else {}))
+        for s in proj.scenes:
+            s.vo.voice = voice
+        members.append({
+            "member_id": uuid.uuid4().hex[:12],
+            "idx": i,
+            "label": label,
+            "template": tpl,
+            "style": style,
+            "voice": voice,
+            "framework": fw,
+            "script": script,
+            "project_json": proj.to_json(),
+            "status": "planned",
+        })
+
+    params = {
+        "count": count, "styles": styles, "templates": templates,
+        "voices": voices, "frameworks": frameworks, "language": req.language,
+    }
+    db_create_variant_set(set_id, req.product, name, script, params, members)
+    result = db_get_variant_set(set_id) or {}
+    result["members"] = [
+        {**m, "scenes": _member_scene_count(m)} for m in result.get("members", [])
+    ]
+    return result
+
+
+def _member_scene_count(member: dict) -> int:
+    try:
+        pj = json.loads(member["project_json"] or "{}")
+        return len(pj.get("scenes", []))
+    except Exception:
+        return 0
+
+
+@app.get("/api/variant-sets")
+async def list_variant_sets_endpoint():
+    """All variant sets, newest first, with member counts."""
+    return {"sets": db_list_variant_sets()}
+
+
+@app.get("/api/variant-sets/{set_id}")
+async def get_variant_set_endpoint(set_id: str):
+    s = db_get_variant_set(set_id)
+    if not s:
+        raise HTTPException(404, "Variant set not found")
+    s["members"] = [{**m, "scenes": _member_scene_count(m)} for m in s.get("members", [])]
+    return s
+
+
+@app.get("/api/variant-sets/{set_id}/export")
+async def export_variant_set(set_id: str):
+    """Download the whole set as a zip: each variant's IR + a CSV summary."""
+    s = db_get_variant_set(set_id)
+    if not s:
+        raise HTTPException(404, "Variant set not found")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README.txt", _variant_readme(s))
+        zf.writestr("variants.csv", _variant_csv(s))
+        for m in s.get("members", []):
+            zf.writestr(
+                f"variants/{m['member_id']}.json",
+                m.get("project_json") or "{}",
+            )
+    buf.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="variant-set-{set_id}.zip"'}
+    return Response(buf.getvalue(), media_type="application/zip", headers=headers)
+
+
+def _variant_readme(s: dict) -> str:
+    lines = [
+        f"Variant set: {s.get('name')}  (id {s.get('set_id')})",
+        f"Product: {s.get('product') or '(none)'}",
+        f"Members: {len(s.get('members', []))}",
+        "",
+        "Each variant is a SceneGraph IR (variants/<id>.json) produced by",
+        "combining a template, a visual style, a voice and a brief framework.",
+        "Import any of them back into the builder to render it.",
+        "",
+        "Combination legend:",
+    ]
+    for m in s.get("members", []):
+        lines.append(f"  {m['idx']+1:02d}. {m['label']}  (framework: {m.get('framework')})")
+    return "\n".join(lines)
+
+
+def _variant_csv(s: dict) -> str:
+    import csv
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["idx", "label", "template", "style", "voice", "framework", "scenes", "status"])
+    for m in s.get("members", []):
+        w.writerow([
+            m["idx"] + 1, m["label"], m["template"], m["style"],
+            m["voice"], m.get("framework"), _member_scene_count(m), m.get("status"),
+        ])
+    return out.getvalue()
 
 
 @app.get("/api/providers")

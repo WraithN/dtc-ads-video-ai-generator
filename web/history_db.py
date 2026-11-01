@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -92,6 +93,34 @@ def init() -> None:
                 name        TEXT,
                 brand_json  TEXT,
                 updated_at  REAL
+            )"""
+        )
+
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS variant_sets (
+                set_id     TEXT PRIMARY KEY,
+                product    TEXT,
+                name       TEXT,
+                script     TEXT,
+                params_json TEXT,
+                created_at REAL
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS variant_members (
+                member_id   TEXT PRIMARY KEY,
+                set_id      TEXT,
+                idx         INTEGER,
+                label       TEXT,
+                template    TEXT,
+                style       TEXT,
+                voice       TEXT,
+                framework   TEXT,
+                script      TEXT,
+                project_json TEXT,
+                status      TEXT,
+                render_id   TEXT,
+                created_at  REAL
             )"""
         )
 
@@ -314,8 +343,6 @@ def migrate_json() -> int:
 
 def upsert_brand_kit(product_key: str, name: str, brand_json: dict) -> dict:
     """Insert or replace a brand kit for a product key. Returns the stored row."""
-    import time
-
     with _LOCK, _conn() as conn:
         conn.execute(
             """INSERT OR REPLACE INTO brand_kits
@@ -360,4 +387,119 @@ def list_brand_kits() -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Variant sets (A/B testing): one product -> many ad variants
+# ---------------------------------------------------------------------------
+
+def create_variant_set(
+    set_id: str, product: str, name: str, script: str, params: dict,
+    members: list[dict],
+) -> dict:
+    """Insert a variant set and its members in one transaction."""
+    with _LOCK, _conn() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO variant_sets
+               (set_id, product, name, script, params_json, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                set_id,
+                product,
+                name,
+                script,
+                json.dumps(params or {}, ensure_ascii=False),
+                time.time(),
+            ),
+        )
+        for m in members:
+            conn.execute(
+                """INSERT OR REPLACE INTO variant_members
+                   (member_id, set_id, idx, label, template, style, voice,
+                    framework, script, project_json, status, render_id, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    m["member_id"],
+                    set_id,
+                    m["idx"],
+                    m.get("label", ""),
+                    m.get("template", ""),
+                    m.get("style", ""),
+                    m.get("voice", ""),
+                    m.get("framework", ""),
+                    m.get("script", ""),
+                    m.get("project_json"),
+                    m.get("status", "planned"),
+                    m.get("render_id"),
+                    time.time(),
+                ),
+            )
+    return get_variant_set(set_id) or {}
+
+
+def get_variant_set(set_id: str) -> dict | None:
+    with _LOCK, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM variant_sets WHERE set_id = ?", (set_id,)
+        ).fetchone()
+        if not row:
+            return None
+        members = [
+            _row_to_member(r)
+            for r in conn.execute(
+                "SELECT * FROM variant_members WHERE set_id = ? ORDER BY idx", (set_id,)
+            ).fetchall()
+        ]
+    return {
+        "set_id": row["set_id"],
+        "product": row["product"],
+        "name": row["name"],
+        "script": row["script"],
+        "params": _load_json(row["params_json"], {}),
+        "created_at": row["created_at"],
+        "members": members,
+    }
+
+
+def _row_to_member(row: sqlite3.Row) -> dict:
+    return {
+        "member_id": row["member_id"],
+        "set_id": row["set_id"],
+        "idx": row["idx"],
+        "label": row["label"],
+        "template": row["template"],
+        "style": row["style"],
+        "voice": row["voice"],
+        "framework": row["framework"],
+        "script": row["script"],
+        "project_json": row["project_json"],
+        "status": row["status"],
+        "render_id": row["render_id"],
+        "created_at": row["created_at"],
+    }
+
+
+def list_variant_sets() -> list[dict]:
+    with _LOCK, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM variant_sets ORDER BY created_at DESC"
+        ).fetchall()
+        sets = []
+        for r in rows:
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM variant_members WHERE set_id = ?",
+                (r["set_id"],),
+            ).fetchone()["n"]
+            sets.append(
+                {
+                    "set_id": r["set_id"],
+                    "product": r["product"],
+                    "name": r["name"],
+                    "script": r["script"],
+                    "params": _load_json(r["params_json"], {}),
+                    "created_at": r["created_at"],
+                    "member_count": n,
+                }
+            )
+        return sets
 
